@@ -1,0 +1,166 @@
+{
+  "cultivars": [
+    {
+      "name": "Amnesia Haze",
+      "aliases": [
+        "amnesia haze",
+        "amnesia"
+      ],
+      "family": "sativa_dominant",
+      "model_coefficients": {
+        "dli_demand_scale": 1.06,
+        "flower_duration_scale": 1.07
+      },
+      "bound_overrides": {
+        "flower_ppfd": [
+          920.0,
+          1900.0
+        ]
+      },
+      "evidence_source_ids": [
+        "rodriguez_morrison_2021_light"
+      ]
+    },
+    {
+      "name": "Gorilla Glue #4",
+      "aliases": [
+        "gorilla glue 4",
+        "gg4"
+      ],
+      "family": "hybrid",
+      "model_coefficients": {
+        "nutrient_window_scale": 0.98,
+        "yield_potential_scale": 1.02
+      },
+      "bound_overrides": {},
+      "evidence_source_ids": [
+        "saloner_2020_n"
+      ]
+    },
+    {
+      "name": "Pineapple Express",
+      "aliases": [
+        "pineapple express"
+      ],
+      "family": "hybrid",
+      "model_coefficients": {
+        "yield_potential_scale": 1.01
+      },
+      "bound_overrides": {},
+      "evidence_source_ids": [
+        "saloner_2019_k"
+      ]
+    },
+    {
+      "name": "Super Silver Haze",
+      "aliases": [
+        "super silver haze",
+        "ssh"
+      ],
+      "family": "sativa_dominant",
+      "model_coefficients": {
+        "dli_demand_scale": 1.07,
+        "flower_duration_scale": 1.08
+      },
+      "bound_overrides": {
+        "flower_total_days": [
+          58.0,
+          86.0
+        ]
+      },
+      "evidence_source_ids": [
+        "ahrens_2024_13h_photoperiod"
+      ]
+    },
+    {
+      "name": "Blue Dream",
+      "aliases": [
+        "blue dream"
+      ],
+      "family": "sativa_dominant",
+      "model_coefficients": {
+        "nutrient_window_scale": 1.02
+      },
+      "bound_overrides": {},
+      "evidence_source_ids": [
+        "saloner_2020_n"
+      ]
+    },
+    {
+      "name": "Northern Lights",
+      "aliases": [
+        "northern lights"
+      ],
+      "family": "indica_dominant",
+      "model_coefficients": {
+        "flower_duration_scale": 0.94,
+        "dli_demand_scale": 0.95
+      },
+      "bound_overrides": {
+        "flower_total_days": [
+          49.0,
+          70.0
+        ]
+      },
+      "evidence_source_ids": [
+        "ahrens_2023_is_twelve_hours"
+      ]
+    },
+    {
+      "name": "OG Kush",
+      "aliases": [
+        "og kush"
+      ],
+      "family": "hybrid",
+      "model_coefficients": {
+        "nutrient_window_scale": 0.97
+      },
+      "bound_overrides": {},
+      "evidence_source_ids": [
+        "saloner_2019_k"
+      ]
+    },
+    {
+      "name": "White Widow",
+      "aliases": [
+        "white widow"
+      ],
+      "family": "hybrid",
+      "model_coefficients": {},
+      "bound_overrides": {},
+      "evidence_source_ids": [
+        "knight_2010_scrog_hydroponic"
+      ]
+    },
+    {
+      "name": "Girl Scout Cookies",
+      "aliases": [
+        "girl scout cookies",
+        "gsc"
+      ],
+      "family": "hybrid",
+      "model_coefficients": {
+        "quality_potential_scale": 1.02
+      },
+      "bound_overrides": {},
+      "evidence_source_ids": [
+        "saloner_2020_n"
+      ]
+    },
+    {
+      "name": "Critical Mass CBD",
+      "aliases": [
+        "critical mass cbd"
+      ],
+      "family": "indica_dominant",
+      "model_coefficients": {
+        "quality_potential_scale": 1.01,
+        "flower_duration_scale": 0.93
+      },
+      "bound_overrides": {},
+      "evidence_source_ids": [
+        "saloner_2019_k"
+      ]
+    }
+  ]
+}

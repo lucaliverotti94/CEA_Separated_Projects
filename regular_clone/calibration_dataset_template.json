@@ -1,0 +1,58 @@
+{
+  "cycles": [
+    {
+      "id": "cycle_001",
+      "mode": "max_yield",
+      "profile_json": "literature_best_profile_runtime.json",
+      "cultivar_name": "Amnesia Haze",
+      "cultivar_family": "sativa_dominant",
+      "system_type": "indoor_cea",
+      "hydro_subsystem": "RDWC",
+      "area_m2": 1.0,
+      "plant_density_pl_m2": 9.0,
+      "recirculation_l_h": 220.0,
+      "source_water_ec_ms_cm": 0.28,
+      "source_water_ph": 7.2,
+      "sensor_qc_score": 0.97,
+      "measurement_protocol": "weekly_lab_validation_v1",
+      "notes": "Reference cycle for first family-level calibration batch.",
+      "seed": 2026,
+      "sanitation_level": 0.94,
+      "observed": {
+        "dry_yield_g_m2": 1450.0,
+        "quality_index": 85.0,
+        "penalty": 6.5,
+        "disease_pressure": 0.9,
+        "hlvd_pressure": 0.02,
+        "energy_kwh_m2": 610.0
+      }
+    },
+    {
+      "id": "cycle_002",
+      "mode": "max_quality",
+      "profile_json": "literature_best_profile_runtime.json",
+      "cultivar_name": "Northern Lights",
+      "cultivar_family": "indica_dominant",
+      "system_type": "indoor_cea",
+      "hydro_subsystem": "NFT",
+      "area_m2": 1.0,
+      "plant_density_pl_m2": 10.0,
+      "recirculation_l_h": 180.0,
+      "source_water_ec_ms_cm": 0.31,
+      "source_water_ph": 7.0,
+      "sensor_qc_score": 0.95,
+      "measurement_protocol": "weekly_lab_validation_v1",
+      "notes": "Quality-focused cycle with conservative nutrient program.",
+      "seed": 3035,
+      "sanitation_level": 0.95,
+      "observed": {
+        "dry_yield_g_m2": 1300.0,
+        "quality_index": 91.0,
+        "penalty": 8.0,
+        "disease_pressure": 0.7,
+        "hlvd_pressure": 0.015,
+        "energy_kwh_m2": 590.0
+      }
+    }
+  ]
+}

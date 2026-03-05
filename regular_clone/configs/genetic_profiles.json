@@ -1,0 +1,216 @@
+{
+  "default_genetic_profile_id": "regular_photoperiodic",
+  "default_cultivar_family": "indica_dominant",
+  "profiles": [
+    {
+      "profile_id": "generic_cannabis",
+      "label": "Cannabis generic baseline",
+      "seed_category": "mixed",
+      "photoperiodic": true,
+      "notes": "Generic fallback profile used for backward-compatible simulations.",
+      "default_cultivar_family": "hybrid",
+      "bound_overrides": {},
+      "family_bound_overrides": {
+        "hybrid": {},
+        "sativa_dominant": {},
+        "indica_dominant": {}
+      },
+      "model_coefficients": {
+        "yield_potential_scale": 1.0,
+        "quality_potential_scale": 1.0,
+        "disease_pressure_scale": 1.0,
+        "hlvd_pressure_scale": 1.0,
+        "nutrient_window_scale": 1.0
+      },
+      "family_model_coefficients": {
+        "hybrid": {
+          "yield_potential_scale": 1.0,
+          "quality_potential_scale": 1.0,
+          "disease_pressure_scale": 1.0,
+          "hlvd_pressure_scale": 1.0,
+          "nutrient_window_scale": 1.0,
+          "flower_duration_scale": 1.0,
+          "dli_demand_scale": 1.0
+        },
+        "sativa_dominant": {
+          "yield_potential_scale": 1.02,
+          "quality_potential_scale": 1.03,
+          "disease_pressure_scale": 1.02,
+          "hlvd_pressure_scale": 1.0,
+          "nutrient_window_scale": 0.98,
+          "flower_duration_scale": 1.07,
+          "dli_demand_scale": 1.06
+        },
+        "indica_dominant": {
+          "yield_potential_scale": 0.99,
+          "quality_potential_scale": 0.98,
+          "disease_pressure_scale": 0.98,
+          "hlvd_pressure_scale": 1.0,
+          "nutrient_window_scale": 1.03,
+          "flower_duration_scale": 0.94,
+          "dli_demand_scale": 0.95
+        }
+      },
+      "metadata": {
+        "uniformity_index": 0.65,
+        "photoperiod_control": 1.0,
+        "rdwc_nft_compatibility": 0.7
+      },
+      "evidence_source_ids": [
+        "saloner_2019_k",
+        "saloner_2020_n",
+        "rodriguez_morrison_2021_light"
+      ]
+    },
+    {
+      "profile_id": "regular_photoperiodic",
+      "label": "Regular Photoperiodic",
+      "seed_category": "regular",
+      "photoperiodic": true,
+      "notes": "Open-pollinated regular photoperiod profile for non-feminized indoor production with clone-cycle propagation.",
+      "default_cultivar_family": "indica_dominant",
+      "bound_overrides": {
+        "ec_veg": [
+          1.2,
+          2.0
+        ],
+        "ec_flower": [
+          1.6,
+          2.4
+        ],
+        "ph_target": [
+          5.8,
+          6.2
+        ],
+        "flower_photoperiod_h": [
+          12.0,
+          14.0
+        ],
+        "n_mg_l": [
+          100.0,
+          220.0
+        ],
+        "p_mg_l": [
+          14.0,
+          52.0
+        ],
+        "k_mg_l": [
+          100.0,
+          240.0
+        ],
+        "veg_days": [
+          20.0,
+          34.0
+        ],
+        "flower_total_days": [
+          58.0,
+          78.0
+        ],
+        "flower_early_days": [
+          24.0,
+          44.0
+        ]
+      },
+      "family_bound_overrides": {
+        "hybrid": {},
+        "sativa_dominant": {
+          "veg_days": [
+            24.0,
+            36.0
+          ],
+          "flower_total_days": [
+            70.0,
+            84.0
+          ],
+          "flower_early_days": [
+            28.0,
+            50.0
+          ],
+          "flower_ppfd": [
+            900.0,
+            1900.0
+          ]
+        },
+        "indica_dominant": {
+          "veg_days": [
+            18.0,
+            30.0
+          ],
+          "flower_total_days": [
+            56.0,
+            72.0
+          ],
+          "flower_early_days": [
+            24.0,
+            42.0
+          ],
+          "flower_ppfd": [
+            780.0,
+            1750.0
+          ]
+        }
+      },
+      "model_coefficients": {
+        "yield_potential_scale": 1.05,
+        "quality_potential_scale": 1.03,
+        "disease_pressure_scale": 0.95,
+        "hlvd_pressure_scale": 0.95,
+        "nutrient_window_scale": 1.02
+      },
+      "family_model_coefficients": {
+        "hybrid": {
+          "yield_potential_scale": 1.0,
+          "quality_potential_scale": 1.0,
+          "disease_pressure_scale": 1.0,
+          "hlvd_pressure_scale": 1.0,
+          "nutrient_window_scale": 1.0,
+          "flower_duration_scale": 1.0,
+          "dli_demand_scale": 1.0
+        },
+        "sativa_dominant": {
+          "yield_potential_scale": 1.02,
+          "quality_potential_scale": 1.03,
+          "disease_pressure_scale": 1.03,
+          "hlvd_pressure_scale": 1.01,
+          "nutrient_window_scale": 0.98,
+          "flower_duration_scale": 1.08,
+          "dli_demand_scale": 1.08
+        },
+        "indica_dominant": {
+          "yield_potential_scale": 0.99,
+          "quality_potential_scale": 0.98,
+          "disease_pressure_scale": 0.97,
+          "hlvd_pressure_scale": 1.0,
+          "nutrient_window_scale": 1.04,
+          "flower_duration_scale": 0.94,
+          "dli_demand_scale": 0.95
+        }
+      },
+      "metadata": {
+        "uniformity_index": 0.72,
+        "photoperiod_control": 1.15,
+        "rdwc_nft_compatibility": 0.9,
+        "cuttings_per_vegetative_plant": 5.0,
+        "dedicated_mother_plants": false,
+        "clone_cycle_target_days_indica": 105.0,
+        "clone_cycle_target_days_sativa": 120.0,
+        "seed_to_cutting_days_min": 27.0,
+        "seed_to_cutting_days_max": 35.0
+      },
+      "evidence_source_ids": [
+        "saloner_2019_k",
+        "saloner_2020_n",
+        "dowling_2022_photoperiod_meta",
+        "ahrens_2023_is_twelve_hours",
+        "ahrens_2024_13h_photoperiod",
+        "powell_2026_mass_balance",
+        "rodriguez_morrison_2021_light",
+        "holweg_2024_red_white_spectra",
+        "llewellyn_2023_uv_minimal_effect",
+        "punja_2025_hlvd_management",
+        "pitman_2020_pythium_report",
+        "ioannidis_2022_ssr_micropropagation"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "required_fields": {
+    "t_air_c": "float (degC)",
+    "rh_pct": "float (%)",
+    "co2_ppm": "float (ppm)",
+    "ppfd": "float (umol m-2 s-1)",
+    "t_solution_c": "float (degC)",
+    "do_mg_l": "float (mg/L)",
+    "ec_ms_cm": "float (mS/cm)",
+    "ph": "float"
+  },
+  "optional_fields": {
+    "timestamp": "ISO8601 string",
+    "transpiration_l_m2_day": "float",
+    "dli_prev": "float (mol m-2 d-1)",
+    "vpd_kpa": "float (kPa)",
+    "disease_pressure": "float",
+    "hlvd_pressure": "float"
+  }
+}
