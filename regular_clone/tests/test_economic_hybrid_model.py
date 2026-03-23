@@ -62,14 +62,91 @@ class EconomicHybridModelTests(unittest.TestCase):
             mix_sativa=0.5,
             target_yield_kg_m2_cycle=0.35,
             energy_cap_kwh_m2_cycle=700.0,
+            yield_source="manual",
         )
         self.assertAlmostEqual(float(c["target_annual_kg"]), 80.0, places=9)
         self.assertTrue(bool(c["plan_checks"]["annual_yield_within_cap"]))
+        self.assertTrue(bool(c["plan_checks"]["annual_yield_equals_target"]))
+        self.assertEqual(str(c["selected_configuration"]["infrastructure_profile"]), "startup_low_capex")
+        self.assertEqual(str(c["selected_configuration"]["energy_architecture"]), "grid_only_retrofit")
+        self.assertEqual(str(c["selected_configuration"]["monitoring_tier"]), "core_efficiency_extended")
+        self.assertTrue(bool(c["constraints_satisfied"]["all"]))
+        self.assertEqual(str(c["economic_yield_basis_policy"]), "target")
+        self.assertAlmostEqual(
+            float(c["economic_yield_basis_kg"]),
+            float(c["target_annual_kg"]),
+            places=9,
+        )
+        self.assertAlmostEqual(
+            float(c["annual_revenue_eur"]),
+            float(c["economic_yield_basis_kg"]) * 1000.0 * float(c["price_eur_g"]),
+            places=6,
+        )
         self.assertIn("annual_revenue_eur", c)
         self.assertIn("ebitda_annual_eur", c)
         self.assertIn("roi_annual_pct", c)
         self.assertIn("simple_payback_years", c)
         self.assertGreater(float(c["annual_revenue_eur"]), 0.0)
+
+    def test_project_case_target_basis_policy_is_supported(self) -> None:
+        c = econ.project_case(
+            target_annual_kg=80.0,
+            price_eur_g=4.0,
+            mix_indica=0.5,
+            mix_sativa=0.5,
+            target_yield_kg_m2_cycle=0.35,
+            energy_cap_kwh_m2_cycle=700.0,
+            economic_yield_basis_policy="target",
+            yield_source="manual",
+        )
+        self.assertEqual(str(c["economic_yield_basis_policy"]), "target")
+        self.assertAlmostEqual(float(c["economic_yield_basis_kg"]), float(c["target_annual_kg"]), places=9)
+        self.assertAlmostEqual(
+            float(c["target_vs_planned_kg"]),
+            float(c["target_annual_kg"]) - float(c["plan_projected_annual_yield_kg"]),
+            places=9,
+        )
+
+    def test_project_case_planned_basis_policy_is_supported(self) -> None:
+        c = econ.project_case(
+            target_annual_kg=80.0,
+            price_eur_g=4.0,
+            mix_indica=0.5,
+            mix_sativa=0.5,
+            target_yield_kg_m2_cycle=0.35,
+            energy_cap_kwh_m2_cycle=700.0,
+            economic_yield_basis_policy="planned",
+            yield_source="manual",
+        )
+        self.assertEqual(str(c["economic_yield_basis_policy"]), "planned")
+        self.assertAlmostEqual(float(c["economic_yield_basis_kg"]), float(c["plan_projected_annual_yield_kg"]), places=9)
+
+    def test_project_case_low_capex_default_is_lower_than_industrial_hybrid_full(self) -> None:
+        c = econ.project_case(
+            target_annual_kg=80.0,
+            price_eur_g=4.0,
+            mix_indica=0.5,
+            mix_sativa=0.5,
+            target_yield_kg_m2_cycle=0.35,
+            energy_cap_kwh_m2_cycle=700.0,
+            yield_source="manual",
+        )
+        ranks = list(c["candidate_rankings"])
+        low = next(
+            r
+            for r in ranks
+            if r["infrastructure_profile"] == "startup_low_capex"
+            and r["energy_architecture"] == "grid_only_retrofit"
+            and r["monitoring_tier"] == "core_efficiency_extended"
+        )
+        ind = next(
+            r
+            for r in ranks
+            if r["infrastructure_profile"] == "industrial_full"
+            and r["energy_architecture"] == "hybrid_full"
+            and r["monitoring_tier"] == "full"
+        )
+        self.assertLess(float(low["capex_total"]), float(ind["capex_total"]))
 
 
 if __name__ == "__main__":

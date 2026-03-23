@@ -4,7 +4,7 @@ from contextlib import redirect_stdout
 
 from core.model import SensorState, StageSetpoint
 from core.mpc_supervisor import enforce_setpoint_limits
-from core.realtime_io import emit_safe_fallback_tick, safe_fallback_setpoint
+from core.realtime_io import emit_safe_fallback_tick, extract_power_observability, safe_fallback_setpoint
 
 
 def _baseline_setpoint() -> StageSetpoint:
@@ -48,6 +48,20 @@ def _sensor_state() -> SensorState:
 
 
 class RealtimeSafetyTests(unittest.TestCase):
+    def test_extract_power_observability_accepts_optional_numeric_fields(self) -> None:
+        out = extract_power_observability(
+            {
+                "power_total_kw": "4.5",
+                "power_led_kw": 2.1,
+                "power_hvac_kw": "bad",
+                "power_pumps_kw": 0.3,
+            }
+        )
+        self.assertAlmostEqual(float(out["power_total_kw"]), 4.5, places=9)
+        self.assertAlmostEqual(float(out["power_led_kw"]), 2.1, places=9)
+        self.assertAlmostEqual(float(out["power_pumps_kw"]), 0.3, places=9)
+        self.assertNotIn("power_hvac_kw", out)
+
     def test_safe_fallback_setpoint_clamps_expected_fields(self) -> None:
         baseline = _baseline_setpoint()
         safe = safe_fallback_setpoint(baseline)

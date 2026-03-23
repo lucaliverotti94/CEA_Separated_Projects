@@ -15,6 +15,10 @@
     "dli_prev": "float (mol m-2 d-1)",
     "vpd_kpa": "float (kPa)",
     "disease_pressure": "float",
-    "hlvd_pressure": "float"
+    "hlvd_pressure": "float",
+    "power_total_kw": "float (kW, optional power telemetry)",
+    "power_led_kw": "float (kW, optional LED power telemetry)",
+    "power_hvac_kw": "float (kW, optional HVAC power telemetry)",
+    "power_pumps_kw": "float (kW, optional pumps power telemetry)"
   }
 }

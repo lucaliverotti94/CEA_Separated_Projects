@@ -64,8 +64,12 @@ RUNTIME_MODE_BASE = {
 }
 ENERGY_CONSTRAINED_MODES = {"max_yield_energy", "max_quality_energy"}
 DEFAULT_ENERGY_CAP_KWH_M2 = 700.0
-DEFAULT_YIELD_CAP_ANNUAL_KG = 80.0
+DEFAULT_YIELD_TARGET_ANNUAL_KG = 80.0
+DEFAULT_QUALITY_FLOOR = 62.0
+# Backward-compatible alias. Keep until downstream integrations migrate.
+DEFAULT_YIELD_CAP_ANNUAL_KG = DEFAULT_YIELD_TARGET_ANNUAL_KG
 DEFAULT_FARM_ACTIVE_AREA_M2 = 1.0
+POWER_OBSERVABILITY_FIELDS = ("power_total_kw", "power_led_kw", "power_hvac_kw", "power_pumps_kw")
 
 
 def _source_event(kind: str, source: str, message: str = "") -> Dict[str, str]:
@@ -96,14 +100,22 @@ def is_energy_constrained_mode(mode: str) -> bool:
     return mode in ENERGY_CONSTRAINED_MODES
 
 
-def resolve_runtime_yield_cap(yield_cap_annual_kg: float, farm_active_area_m2: float) -> tuple[float, float, float]:
-    cap = float(yield_cap_annual_kg)
+def resolve_runtime_yield_target(yield_target_annual_kg: float, farm_active_area_m2: float) -> tuple[float, float, float]:
+    target = float(yield_target_annual_kg)
     area = float(farm_active_area_m2)
-    if cap <= 0.0:
-        raise ValueError("yield_cap_annual_kg must be > 0")
+    if target <= 0.0:
+        raise ValueError("yield_target_annual_kg must be > 0")
     if area <= 0.0:
         raise ValueError("farm_active_area_m2 must be > 0")
-    return cap, area, (cap / area)
+    return target, area, (target / area)
+
+
+def resolve_runtime_yield_cap(yield_cap_annual_kg: float, farm_active_area_m2: float) -> tuple[float, float, float]:
+    # Backward-compatible alias. Internally we use exact target semantics.
+    return resolve_runtime_yield_target(
+        yield_target_annual_kg=yield_cap_annual_kg,
+        farm_active_area_m2=farm_active_area_m2,
+    )
 
 
 def resolve_runtime_energy_cap(mode: str, energy_cap_kwh_m2: float) -> tuple[bool, float]:
@@ -365,6 +377,18 @@ def sensor_payload_to_state(
         disease_pressure=disease_pressure,
         hlvd_pressure=hlvd_pressure,
     )
+
+
+def extract_power_observability(payload: Dict) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for key in POWER_OBSERVABILITY_FIELDS:
+        if key not in payload:
+            continue
+        try:
+            out[key] = float(payload[key])
+        except Exception:
+            continue
+    return out
 
 
 def iter_jsonl_file(path: Path, poll_s: float, emit_source_events: bool = False) -> Generator[Dict, None, None]:
@@ -676,10 +700,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--cultivar-name", default="", help="Optional cultivar tag stored in profile metadata.")
     parser.add_argument(
+        "--yield-target-annual-kg",
         "--yield-cap-annual-kg",
+        dest="yield_target_annual_kg",
         type=float,
-        default=DEFAULT_YIELD_CAP_ANNUAL_KG,
-        help="Hard annual farm yield cap (kg/year).",
+        default=DEFAULT_YIELD_TARGET_ANNUAL_KG,
+        help="Exact annual farm yield target (kg/year).",
     )
     parser.add_argument(
         "--energy-cap-kwh-m2",
@@ -688,10 +714,16 @@ def parse_args() -> argparse.Namespace:
         help="Hard energy cap (kWh/m2 per cycle) for *_energy modes.",
     )
     parser.add_argument(
+        "--quality-floor",
+        type=float,
+        default=DEFAULT_QUALITY_FLOOR,
+        help="Minimum quality index for max_yield/max_yield_energy modes.",
+    )
+    parser.add_argument(
         "--farm-active-area-m2",
         type=float,
         default=DEFAULT_FARM_ACTIVE_AREA_M2,
-        help="Active productive area (m2) used to enforce annual yield cap.",
+        help="Available active productive area (m2) used to verify exact annual target feasibility.",
     )
     parser.add_argument(
         "--start-date",
@@ -763,8 +795,8 @@ def main() -> None:
 
     start_date = _parse_iso_date(args.start_date)
     try:
-        yield_cap_annual_kg, farm_active_area_m2, yield_cap_kg_m2_year = resolve_runtime_yield_cap(
-            yield_cap_annual_kg=float(args.yield_cap_annual_kg),
+        yield_target_annual_kg, farm_active_area_m2, yield_target_kg_m2_year = resolve_runtime_yield_target(
+            yield_target_annual_kg=float(args.yield_target_annual_kg),
             farm_active_area_m2=float(args.farm_active_area_m2),
         )
         energy_constraint_active, energy_cap_kwh_m2 = resolve_runtime_energy_cap(
@@ -775,6 +807,8 @@ def main() -> None:
         raise SystemExit(str(exc))
     if args.store_db:
         init_storage(args.store_db)
+    if float(args.quality_floor) <= 0.0:
+        raise SystemExit("quality_floor must be > 0")
 
     profile = load_profile(
         mode=args.mode,
@@ -783,17 +817,20 @@ def main() -> None:
         cultivar_family=args.cultivar_family,
         cultivar_name=args.cultivar_name,
     )
-    projected_annual_yield_kg, projected_metrics = projected_annual_yield_from_profile(
+    _, projected_metrics = projected_annual_yield_from_profile(
         profile=profile,
         mode_base=control_mode,
         farm_active_area_m2=farm_active_area_m2,
     )
-    if projected_annual_yield_kg > yield_cap_annual_kg + 1e-9:
+    profile_yield_kg_m2_year = float(projected_metrics.get("dry_yield_kg_m2_year", 0.0))
+    required_active_area_m2_for_target = float(yield_target_annual_kg) / max(profile_yield_kg_m2_year, 1e-9)
+    if required_active_area_m2_for_target > float(farm_active_area_m2) + 1e-9:
         raise SystemExit(
-            "Profile violates hard annual yield cap: "
-            f"{projected_annual_yield_kg:.3f} kg/year > {yield_cap_annual_kg:.3f} kg/year. "
-            "Adjust --yield-cap-annual-kg / --farm-active-area-m2 or provide another profile."
+            "Profile cannot satisfy exact annual yield target with available active area: "
+            f"required_area={required_active_area_m2_for_target:.3f} m2 > available_area={farm_active_area_m2:.3f} m2. "
+            "Increase --farm-active-area-m2 or reduce --yield-target-annual-kg."
         )
+    projected_annual_yield_kg = float(yield_target_annual_kg)
     try:
         profile_energy_kwh_m2 = resolve_profile_energy_kwh_m2_cycle(projected_metrics)
     except ValueError as exc:
@@ -804,6 +841,17 @@ def main() -> None:
             f"{profile_energy_kwh_m2:.3f} kWh/m2 > {energy_cap_kwh_m2:.3f} kWh/m2. "
             "Raise --energy-cap-kwh-m2 or provide a lower-energy profile."
         )
+    projected_cycle_quality_index = None
+    if control_mode == "max_yield":
+        twin_q = CEADigitalTwin(random_seed=2026, sanitation_level=0.94)
+        quality_out = twin_q.simulate_cycle(profile=profile, mode=control_mode)
+        projected_cycle_quality_index = float(quality_out.quality_index)
+        if projected_cycle_quality_index < float(args.quality_floor) - 1e-9:
+            raise SystemExit(
+                "Profile violates quality floor for max_yield runtime: "
+                f"{projected_cycle_quality_index:.3f} < {float(args.quality_floor):.3f}. "
+                "Lower --quality-floor or provide a higher-quality profile."
+            )
     controller = AdaptiveController(mode=control_mode)
     runtime_run_id = new_run_id("rt_core")
     profile_signature = dict_signature(profile_to_dict(profile))
@@ -872,14 +920,20 @@ def main() -> None:
                 "git_commit": git_commit_short(),
                 "profile_signature": profile_signature,
                 "stages": profile.stage_days,
-                "yield_cap_annual_kg": float(yield_cap_annual_kg),
+                "yield_target_annual_kg": float(yield_target_annual_kg),
                 "farm_active_area_m2": float(farm_active_area_m2),
-                "yield_cap_kg_m2_year": float(yield_cap_kg_m2_year),
+                "yield_target_kg_m2_year": float(yield_target_kg_m2_year),
+                "yield_cap_annual_kg": float(yield_target_annual_kg),
+                "yield_cap_kg_m2_year": float(yield_target_kg_m2_year),
                 "projected_annual_yield_kg": float(projected_annual_yield_kg),
                 "projected_annual_yield_kg_m2": float(projected_metrics.get("dry_yield_kg_m2_year", 0.0)),
+                "planned_active_area_m2_for_target": float(required_active_area_m2_for_target),
+                "planned_active_area_utilization_frac": float(required_active_area_m2_for_target / max(float(farm_active_area_m2), 1e-9)),
                 "projected_cycle_energy_kwh_m2": float(profile_energy_kwh_m2),
+                "projected_cycle_quality_index": float(projected_cycle_quality_index) if projected_cycle_quality_index is not None else None,
                 "energy_constraint_active": bool(energy_constraint_active),
                 "energy_cap_kwh_m2": float(energy_cap_kwh_m2) if energy_constraint_active else None,
+                "quality_floor": float(args.quality_floor) if control_mode == "max_yield" else None,
             },
             ensure_ascii=False,
         )
@@ -1058,6 +1112,9 @@ def main() -> None:
                 "profile_signature": profile_signature,
             },
         }
+        power_obs = extract_power_observability(payload)
+        if power_obs:
+            out["energy_observability_kw"] = power_obs
         emit_output(
             out,
             out_jsonl=args.out_jsonl,

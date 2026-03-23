@@ -4,8 +4,8 @@ from pathlib import Path
 
 from core import production_planner
 from core.model import FLOWER_DENSITY_BY_FAMILY, HARD_STAGE_DAYS_BY_FAMILY
-from core.realtime_io import DEFAULT_YIELD_CAP_ANNUAL_KG as RT_DEFAULT_YIELD_CAP
-from optimizer_literature_best import DEFAULT_YIELD_CAP_ANNUAL_KG as OPT_DEFAULT_YIELD_CAP
+from core.realtime_io import DEFAULT_YIELD_CAP_ANNUAL_KG as RT_DEFAULT_YIELD_TARGET
+from optimizer_literature_best import DEFAULT_YIELD_TARGET_ANNUAL_KG as OPT_DEFAULT_YIELD_TARGET
 
 
 class ParameterCoherenceTests(unittest.TestCase):
@@ -44,12 +44,11 @@ class ParameterCoherenceTests(unittest.TestCase):
             places=9,
         )
 
-    def test_yield_cap_default_is_parametric_and_consistent(self) -> None:
-        self.assertAlmostEqual(float(RT_DEFAULT_YIELD_CAP), 80.0, places=9)
-        self.assertAlmostEqual(float(OPT_DEFAULT_YIELD_CAP), 80.0, places=9)
+    def test_yield_target_default_is_parametric_and_consistent(self) -> None:
+        self.assertAlmostEqual(float(RT_DEFAULT_YIELD_TARGET), 80.0, places=9)
+        self.assertAlmostEqual(float(OPT_DEFAULT_YIELD_TARGET), 80.0, places=9)
         self.assertAlmostEqual(float(production_planner.PlannerInput().target_annual_kg), 80.0, places=9)
 
 
 if __name__ == "__main__":
     unittest.main()
-

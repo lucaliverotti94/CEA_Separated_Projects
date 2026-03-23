@@ -9,7 +9,8 @@ param(
 
     [double]$WatchdogTimeoutS = 5.0,
     [int]$MaxSamples = 20,
-    [double]$YieldCapAnnualKg = 80.0,
+    [Alias("YieldCapAnnualKg")]
+    [double]$YieldTargetAnnualKg = 80.0,
     [double]$FarmActiveAreaM2 = 1.0,
 
     [string]$ProfileJson = "",
@@ -39,7 +40,7 @@ $args = @(
     "--serial-port", $SerialPort,
     "--serial-baud", "$SerialBaud",
     "--watchdog-timeout-s", "$WatchdogTimeoutS",
-    "--yield-cap-annual-kg", "$YieldCapAnnualKg",
+    "--yield-target-annual-kg", "$YieldTargetAnnualKg",
     "--farm-active-area-m2", "$FarmActiveAreaM2",
     "--max-samples", "$MaxSamples",
     "--out-jsonl", $OutJsonl,

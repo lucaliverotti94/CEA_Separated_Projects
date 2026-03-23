@@ -10,7 +10,8 @@ param(
     [int]$DurationSec = 90,
     [double]$TickSeconds = 0.5,
     [double]$WatchdogTimeoutS = 2.0,
-    [double]$YieldCapAnnualKg = 80.0,
+    [Alias("YieldCapAnnualKg")]
+    [double]$YieldTargetAnnualKg = 80.0,
     [double]$FarmActiveAreaM2 = 1.0,
     [string]$OutJsonl = "control_output_fault_hil.jsonl",
     [string]$StoreDb = "cea_timeseries.db",
@@ -72,7 +73,7 @@ try {
         "--http-url", $endpoint,
         "--poll-seconds", "$TickSeconds",
         "--watchdog-timeout-s", "$WatchdogTimeoutS",
-        "--yield-cap-annual-kg", "$YieldCapAnnualKg",
+        "--yield-target-annual-kg", "$YieldTargetAnnualKg",
         "--farm-active-area-m2", "$FarmActiveAreaM2",
         "--max-samples", "$DurationSamples",
         "--out-jsonl", $OutJsonl,

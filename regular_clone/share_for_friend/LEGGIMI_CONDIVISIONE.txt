@@ -1,0 +1,12 @@
+﻿Pacchetto di condivisione progetto regular_clone
+
+Contenuto:
+- README.md
+- docs/DOCUMENTAZIONE_TECNICA_REGULAR_CLONE_IT.pdf
+- docs/BUSINESS_MEMO_REGULAR_CLONE_IT.pdf
+- docs/BUSINESS_MEMO_REGULAR_CLONE_IT.tex
+- docs/NEXT_STEPS.md
+- docs/ADDENDUM_ECONOMICO_2026-03-23_IT.md
+
+Nota:
+Questo pacchetto contiene file descrittivi/documentali utili alla presentazione del progetto.

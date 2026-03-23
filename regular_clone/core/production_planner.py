@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from math import ceil
 from typing import Dict, List
 
 
@@ -79,12 +78,13 @@ def _area_capacity(net_area_m2: float, margin: float) -> float:
     return float(net_area_m2 * (1.0 + margin))
 
 
-def _split_windows(total_weekly: int, windows: int) -> List[int]:
-    base = total_weekly // windows
-    rem = total_weekly % windows
-    out = []
-    for idx in range(windows):
-        out.append(base + (1 if idx < rem else 0))
+def _split_windows(total_weekly: float, windows: int) -> List[float]:
+    total = float(total_weekly)
+    if windows <= 1:
+        return [total]
+    base = total / float(windows)
+    out: List[float] = [round(base, 6) for _ in range(windows - 1)]
+    out.append(round(total - sum(out), 6))
     return out
 
 
@@ -101,7 +101,7 @@ def _weekly_cuttings_capacity(
 
 
 def _projected_annual_yield_from_schedule(
-    detached_week: Dict[str, int],
+    detached_week: Dict[str, float],
     rooting_rate: float,
     yield_per_plant_kg: Dict[str, float],
 ) -> float:
@@ -112,42 +112,16 @@ def _projected_annual_yield_from_schedule(
     return float(total)
 
 
-def _rebalance_weekly_detached_for_yield_cap(
-    detached_week: Dict[str, int],
-    target_annual_kg: float,
+def _weekly_detached_for_exact_target(
+    annual_target_by_family_kg: Dict[str, float],
     rooting_rate: float,
     yield_per_plant_kg: Dict[str, float],
-) -> tuple[Dict[str, int], float, bool]:
-    current = {
-        "indica_dominant": int(detached_week["indica_dominant"]),
-        "sativa_dominant": int(detached_week["sativa_dominant"]),
-    }
-    projected = _projected_annual_yield_from_schedule(current, rooting_rate, yield_per_plant_kg)
-    if projected <= target_annual_kg + 1e-9:
-        return current, projected, False
-
-    best_under: Dict[str, int] | None = None
-    best_under_proj = -1.0
-    best_any: Dict[str, int] = dict(current)
-    best_any_proj = projected
-
-    for detached_i in range(1, current["indica_dominant"] + 1):
-        for detached_s in range(1, current["sativa_dominant"] + 1):
-            cand = {
-                "indica_dominant": int(detached_i),
-                "sativa_dominant": int(detached_s),
-            }
-            cand_proj = _projected_annual_yield_from_schedule(cand, rooting_rate, yield_per_plant_kg)
-            if cand_proj < best_any_proj:
-                best_any_proj = cand_proj
-                best_any = cand
-            if cand_proj <= target_annual_kg + 1e-9 and cand_proj > best_under_proj:
-                best_under_proj = cand_proj
-                best_under = cand
-
-    if best_under is not None:
-        return best_under, best_under_proj, True
-    return best_any, best_any_proj, True
+) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for family in FAMILIES:
+        denom = 52.0 * float(rooting_rate) * max(float(yield_per_plant_kg[family]), 1e-9)
+        out[family] = float(annual_target_by_family_kg[family]) / max(denom, 1e-9)
+    return out
 
 
 def build_clone_logistics_plan(cfg: PlannerInput) -> Dict[str, object]:
@@ -206,23 +180,19 @@ def build_clone_logistics_plan(cfg: PlannerInput) -> Dict[str, object]:
     max_sat = max(saturation.values())
     blocked = bool(max_sat >= cfg.saturation_threshold)
 
-    detached_week = {
-        f: int(ceil((annual_plants_needed[f] / 52.0) / cfg.rooting_rate)) for f in FAMILIES
-    }
-    rebalance_applied = False
-    if blocked:
-        # MODIFICATO: auto-ribilanciamento lotti quando la saturazione supera la soglia
-        # fonte: requisito operativo piano logistico multi-ciclo
-        scale = max((cfg.saturation_threshold / max(max_sat, 1e-9)) * 0.98, 0.20)
-        for f in FAMILIES:
-            detached_week[f] = max(1, int(ceil(detached_week[f] * scale)))
-        rebalance_applied = True
-    detached_week, projected_annual_yield_kg, yield_cap_rebalance_applied = _rebalance_weekly_detached_for_yield_cap(
-        detached_week=detached_week,
-        target_annual_kg=cfg.target_annual_kg,
+    detached_week = _weekly_detached_for_exact_target(
+        annual_target_by_family_kg=annual_target_by_family,
         rooting_rate=cfg.rooting_rate,
         yield_per_plant_kg=yield_per_plant_kg,
     )
+    projected_annual_yield_kg = _projected_annual_yield_from_schedule(
+        detached_week=detached_week,
+        rooting_rate=cfg.rooting_rate,
+        yield_per_plant_kg=yield_per_plant_kg,
+    )
+    target_vs_projected_kg = float(cfg.target_annual_kg) - float(projected_annual_yield_kg)
+    yield_target_tol_kg = 1e-6
+    annual_target_exact = bool(abs(target_vs_projected_kg) <= yield_target_tol_kg)
 
     rooted_week = {
         f: float(detached_week[f] * cfg.rooting_rate) for f in FAMILIES
@@ -241,9 +211,9 @@ def build_clone_logistics_plan(cfg: PlannerInput) -> Dict[str, object]:
             {
                 "window_index": idx + 1,
                 "detached_cuttings": {
-                    "indica_dominant": det_i,
-                    "sativa_dominant": det_s,
-                    "total": det_i + det_s,
+                    "indica_dominant": round(float(det_i), 6),
+                    "sativa_dominant": round(float(det_s), 6),
+                    "total": round(float(det_i + det_s), 6),
                 },
                 "expected_rooted_cuttings": {
                     "indica_dominant": round(det_i * cfg.rooting_rate, 2),
@@ -266,7 +236,11 @@ def build_clone_logistics_plan(cfg: PlannerInput) -> Dict[str, object]:
             (detached_week["indica_dominant"] + detached_week["sativa_dominant"]) <= weekly_cuttings_cap
         ),
         "saturation_below_threshold": bool(max_sat < cfg.saturation_threshold),
-        "annual_yield_within_cap": bool(projected_annual_yield_kg <= (cfg.target_annual_kg + 1e-9)),
+        "annual_yield_exact_match": annual_target_exact,
+        "annual_yield_matches_target": annual_target_exact,
+        "annual_yield_equals_target": annual_target_exact,
+        # Backward-compatible key kept for old consumers; now mapped to exact-equality semantics.
+        "annual_yield_within_cap": annual_target_exact,
     }
 
     return {
@@ -299,11 +273,13 @@ def build_clone_logistics_plan(cfg: PlannerInput) -> Dict[str, object]:
             "blocked_for_over_saturation": blocked,
         },
         "weekly_clone_plan": {
+            "yield_target_mode": "exact_equal",
+            "yield_target_tolerance_kg": float(yield_target_tol_kg),
             "cadence_windows_per_week": cfg.cuttings_windows_per_week,
             "detached_cuttings_per_week": {
-                "indica_dominant": detached_week["indica_dominant"],
-                "sativa_dominant": detached_week["sativa_dominant"],
-                "total": detached_week["indica_dominant"] + detached_week["sativa_dominant"],
+                "indica_dominant": round(float(detached_week["indica_dominant"]), 6),
+                "sativa_dominant": round(float(detached_week["sativa_dominant"]), 6),
+                "total": round(float(detached_week["indica_dominant"] + detached_week["sativa_dominant"]), 6),
             },
             "expected_rooted_per_week": {
                 "indica_dominant": rooted_week["indica_dominant"],
@@ -316,16 +292,18 @@ def build_clone_logistics_plan(cfg: PlannerInput) -> Dict[str, object]:
                 "total": harvest_kg_week["indica_dominant"] + harvest_kg_week["sativa_dominant"],
             },
             "projected_annual_yield_kg_from_schedule": projected_annual_yield_kg,
+            "target_vs_projected_kg": float(target_vs_projected_kg),
             "windows": windows,
             "weekly_cuttings_capacity_limit": weekly_cuttings_cap,
-            "rebalance_applied": rebalance_applied,
-            "yield_cap_rebalance_applied": yield_cap_rebalance_applied,
+            "rebalance_applied": False,
+            "yield_target_rebalance_applied": False,
+            "yield_cap_rebalance_applied": False,
         },
         "scheduler_rules": [
             "max 5 cuttings per vegetative plant",
             "no dedicated mother-plant phase",
+            "detached cuttings are solved as weekly-equivalent values to satisfy exact annual target",
             "auto-block when any zone saturation >= threshold",
-            "auto-rebalance by reducing detached cuttings in next window when blocked",
         ],
         "checks": checks,
     }

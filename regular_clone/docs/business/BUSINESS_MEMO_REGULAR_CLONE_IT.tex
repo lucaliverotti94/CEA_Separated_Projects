@@ -1,0 +1,170 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[italian]{babel}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  urlcolor=blue!50!black,
+  pdftitle={Business Memo regular_clone},
+  pdfauthor={Team Progetto}
+}
+
+\title{\textbf{regular\_clone}\\Business Memo per Investitore}
+\author{Team Progetto}
+\date{23 Marzo 2026}
+
+\begin{document}
+\maketitle
+
+\section*{Executive Summary}
+\texttt{regular\_clone} e una piattaforma software CEA per farm idroponiche che integra:
+\begin{itemize}
+  \item digital twin calibrabile su dati reali;
+  \item optimizer offline con vincoli hard su energia e resa annua;
+  \item controller realtime closed-loop con fallback e audit trail.
+\end{itemize}
+Per la fase di ingresso e stata adottata una baseline \textbf{massima resa / minimo CAPEX}:
+\texttt{startup\_low\_capex + grid\_only\_retrofit + core\_efficiency\_extended}, con
+\texttt{quality\_floor = 62}, \texttt{yield\_target\_annual\_kg = 80} (uguale, non solo \(\le\)),
+\texttt{energy\_cap\_kwh\_m2\_cycle = 700}.
+
+\section*{Perche e rilevante per un investitore}
+La metrica chiave non e solo ``quanta resa'', ma \textbf{resa auditabile per euro investito} con rischio operativo controllato.
+Il sistema impone in modo nativo:
+\begin{itemize}
+  \item target annuo in uguaglianza (governance commerciale);
+  \item cap energetico hard (governance costi energia);
+  \item floor qualita hard nelle modalita resa (protezione prezzo medio).
+\end{itemize}
+Questo converte il progetto in un processo industriale misurabile e non in una gestione manuale ``a ricetta''.
+
+\section*{Configurazione startup ufficiale}
+\begin{longtable}{@{}p{6.2cm}p{5.8cm}@{}}
+\toprule
+Parametro decisionale & Valore adottato \\ \midrule
+Architettura energia & \texttt{grid\_only\_retrofit} \\
+Profilo infrastrutturale & \texttt{startup\_low\_capex} \\
+Tier monitoraggio & \texttt{core\_efficiency\_extended} \\
+Vincolo resa annua & \texttt{yield\_target\_annual\_kg = 80} (\(=\)) \\
+Vincolo energia ciclo & \texttt{energy\_cap\_kwh\_m2\_cycle = 700} \\
+Guardrail qualita su resa & \texttt{quality\_floor = 62} \\
+Source KPI economici & \texttt{yield\_source = optimizer} \\
+\bottomrule
+\end{longtable}
+
+\section*{Scenario principale 80 kg/anno (policy ufficiale)}
+\textbf{Metodo}: output diretto del modulo \texttt{economics/cea\_economic\_analysis.py} con selezione
+\texttt{min\_capex\_feasible} su catalogo configurazioni.
+
+\begin{longtable}{@{}p{6.6cm}p{5.6cm}@{}}
+\toprule
+Indicatore & Valore scenario base \\ \midrule
+Target annuo impostato & 80.00 kg/anno \\
+Resa pianificata effettiva & 80.00 kg/anno \\
+Resa ciclo usata dal modello economico & 1.400 kg/m2/ciclo \\
+Qualita ciclo usata dal modello economico & 73.10 (floor 62) \\
+CAPEX totale selezionato & 79,433.84 EUR \\
+OPEX totale annuo & 61,052.00 EUR/anno \\
+Energia annua totale & 53,382.62 kWh/anno \\
+Import energia da rete & 53,382.62 kWh/anno \\
+Ricavi annui (\(4.0\) EUR/g) & 320,000.00 EUR/anno \\
+EBITDA annuo & 258,948.00 EUR/anno \\
+ROI annuo semplice & 325.99\% \\
+Payback semplice & 0.31 anni \\
+Break-even produzione & 15.26 kg/anno \\
+Break-even prezzo & 0.763 EUR/g \\
+\bottomrule
+\end{longtable}
+
+\section*{Confronto con baseline industriale completa}
+Confronto diretto sullo stesso target 80 kg/anno:
+\begin{itemize}
+  \item startup selezionata: \texttt{startup\_low\_capex + grid\_only\_retrofit + core\_efficiency\_extended};
+  \item baseline industriale full: \texttt{industrial\_full + hybrid\_full + full}.
+\end{itemize}
+
+\begin{longtable}{@{}p{5.8cm}p{3.0cm}p{3.0cm}@{}}
+\toprule
+Indicatore & Startup selezionata & Industriale full \\ \midrule
+CAPEX totale & 79,433.84 EUR & 276,622.14 EUR \\
+OPEX annuo & 61,052.00 EUR & 62,852.76 EUR \\
+EBITDA annuo (\(4.0\) EUR/g) & 258,948.00 EUR & 257,147.24 EUR \\
+Payback semplice & 0.31 anni & 1.08 anni \\
+Vincoli hard soddisfatti & si & si \\
+\bottomrule
+\end{longtable}
+
+\section*{Sensitivita prezzo (80 kg/anno)}
+\begin{longtable}{@{}p{3.0cm}p{3.2cm}p{3.2cm}p{2.8cm}p{2.8cm}@{}}
+\toprule
+Prezzo (EUR/g) & Ricavi annui & EBITDA annuo & ROI annuo & Payback \\ \midrule
+3.2 & 256,000.00 & 194,948.00 & 245.42\% & 0.41 anni \\
+4.0 & 320,000.00 & 258,948.00 & 325.99\% & 0.31 anni \\
+5.0 & 400,000.00 & 338,948.00 & 426.70\% & 0.23 anni \\
+\bottomrule
+\end{longtable}
+
+\section*{Scenario crescita 104 kg/anno}
+Con la stessa logica di selezione min-CAPEX vincolata:
+\begin{longtable}{@{}p{6.6cm}p{5.6cm}@{}}
+\toprule
+Indicatore & Scenario crescita \\ \midrule
+Target annuo impostato & 104.00 kg/anno \\
+Resa pianificata effettiva & 104.00 kg/anno \\
+CAPEX totale selezionato & 93,641.20 EUR \\
+OPEX totale annuo & 67,413.90 EUR/anno \\
+Ricavi annui (\(4.0\) EUR/g) & 416,000.00 EUR/anno \\
+EBITDA annuo & 348,586.10 EUR/anno \\
+ROI annuo semplice & 372.26\% \\
+Payback semplice & 0.27 anni \\
+\bottomrule
+\end{longtable}
+
+\section*{Rischi e mitigazioni}
+\begin{longtable}{@{}p{4.0cm}p{7.8cm}@{}}
+\toprule
+Rischio & Mitigazione implementata \\ \midrule
+Scostamento simulato-vs-reale & Fase obbligatoria di calibrazione twin su banco pilota con dataset reale multi-ciclo. \\
+Deriva costi energia & Vincolo hard \texttt{energy\_cap\_kwh\_m2\_cycle} nelle modalita \texttt{*\_energy}. \\
+Deriva qualita in modalita resa & Guardrail hard \texttt{quality\_floor} su \texttt{max\_yield}/\texttt{max\_yield\_energy}. \\
+Fault operativi sensori/attuatori & Quality gate, fallback setpoint, alerting rolling-window, persistenza DB auditabile. \\
+Rischio under/over-production & Vincolo annuo in uguaglianza su planner/optimizer/realtime. \\
+\bottomrule
+\end{longtable}
+
+\section*{Milestone verso go-live}
+\begin{enumerate}
+  \item setup banco pilota 1--2 m2 con stessa logica DWC/NFT della produzione;
+  \item raccolta dataset reali e calibrazione twin;
+  \item validazione KPI tecnici/economici su cicli pilota;
+  \item avvio produzione con modalita \texttt{max\_yield\_energy} e reporting KPI mensile;
+  \item decisione di scala da 80 a 104 kg/anno su base dati.
+\end{enumerate}
+
+\section*{Tracciabilita e riproducibilita}
+I numeri di questo memo derivano dal comando:
+\begin{verbatim}
+.\.venv\Scripts\python.exe .\scripts\run_economic_analysis.py ^
+  --target-annual-kg 80 --price-eur-g 4.0 ^
+  --mix-indica 0.5 --mix-sativa 0.5 ^
+  --yield-source optimizer --optimizer-mode max_yield_energy ^
+  --quality-floor 62 ^
+  --infrastructure-profile startup_low_capex ^
+  --energy-architecture grid_only_retrofit ^
+  --monitoring-tier core_efficiency_extended ^
+  --energy-cap-kwh-m2-cycle 700 ^
+  --economic-yield-basis-policy target --json-only
+\end{verbatim}
+
+\end{document}

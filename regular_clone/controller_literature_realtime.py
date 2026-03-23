@@ -18,14 +18,14 @@ from core.genetics import (
 )
 from core.alerting import AlertThresholds, OperationalAlertMonitor
 from core.governance import dict_signature, git_commit_short, new_run_id
-from core.model import AdaptiveController, SensorState, profile_to_dict
+from core.model import AdaptiveController, CEADigitalTwin, SensorState, profile_to_dict
 from core.mpc_supervisor import MPCConfig, MPCSupervisor, enforce_setpoint_limits
 from core.sensor_quality import evaluate_sensor_quality
 from core.storage import init_storage, store_alert_event, store_control_tick, store_optimizer_run
 from core.realtime_io import (
     DEFAULT_ENERGY_CAP_KWH_M2,
     DEFAULT_FARM_ACTIVE_AREA_M2,
-    DEFAULT_YIELD_CAP_ANNUAL_KG,
+    DEFAULT_YIELD_TARGET_ANNUAL_KG,
     SerialActuatorSink,
     _iso_now,
     _parse_iso_date,
@@ -39,12 +39,12 @@ from core.realtime_io import (
     projected_annual_yield_from_profile,
     resolve_profile_energy_kwh_m2_cycle,
     resolve_runtime_energy_cap,
-    resolve_runtime_yield_cap,
+    resolve_runtime_yield_target,
     resolve_stage_for_day,
     sensor_payload_to_state,
     source_event_kind,
 )
-from optimizer_literature_best import run_mode
+from optimizer_literature_best import DEFAULT_QUALITY_FLOOR, run_mode
 
 RUNTIME_MODE_BASE = {
     "max_yield": "max_yield",
@@ -52,6 +52,7 @@ RUNTIME_MODE_BASE = {
     "max_yield_energy": "max_yield",
     "max_quality_energy": "max_quality",
 }
+POWER_OBSERVABILITY_FIELDS = ("power_total_kw", "power_led_kw", "power_hvac_kw", "power_pumps_kw")
 
 
 def _runtime_base_mode(mode: str) -> str:
@@ -65,8 +66,9 @@ def _runtime_base_mode(mode: str) -> str:
 def _build_profile_from_literature(mode: str, args: argparse.Namespace) -> Dict:
     opt_args = SimpleNamespace(
         quality_y_min=args.quality_y_min,
+        quality_floor=args.quality_floor,
         energy_cap_kwh_m2=args.energy_cap_kwh_m2,
-        yield_cap_annual_kg=args.yield_cap_annual_kg,
+        yield_target_annual_kg=args.yield_target_annual_kg,
         farm_active_area_m2=args.farm_active_area_m2,
         n_init=args.opt_n_init,
         n_iter=args.opt_n_iter,
@@ -82,6 +84,36 @@ def _build_profile_from_literature(mode: str, args: argparse.Namespace) -> Dict:
         cultivar_name=args.cultivar_name,
     )
     return run_mode(mode=mode, args=opt_args)
+
+
+def _extract_power_observability(payload: Dict) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for key in POWER_OBSERVABILITY_FIELDS:
+        if key not in payload:
+            continue
+        try:
+            out[key] = float(payload[key])
+        except Exception:
+            continue
+    return out
+
+
+def _validate_profile_quality_floor(profile, control_mode: str, quality_floor: float) -> float | None:
+    if control_mode != "max_yield":
+        return None
+    floor = float(quality_floor)
+    if floor <= 0.0:
+        raise ValueError("quality_floor must be > 0")
+    twin_q = CEADigitalTwin(random_seed=2026, sanitation_level=0.94)
+    quality_out = twin_q.simulate_cycle(profile=profile, mode=control_mode)
+    projected_cycle_quality_index = float(quality_out.quality_index)
+    if projected_cycle_quality_index < floor - 1e-9:
+        raise ValueError(
+            "Profile violates quality floor for max_yield runtime: "
+            f"{projected_cycle_quality_index:.3f} < {floor:.3f}. "
+            "Lower --quality-floor or regenerate/provide a higher-quality profile."
+        )
+    return projected_cycle_quality_index
 
 
 def _write_generated_profile(path: Path, result: Dict) -> None:
@@ -148,22 +180,30 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--quality-y-min", type=float, default=1300.0, help="Yield floor for max_quality optimization.")
     parser.add_argument(
+        "--quality-floor",
+        type=float,
+        default=DEFAULT_QUALITY_FLOOR,
+        help="Minimum quality index for max_yield/max_yield_energy modes.",
+    )
+    parser.add_argument(
         "--energy-cap-kwh-m2",
         type=float,
         default=DEFAULT_ENERGY_CAP_KWH_M2,
         help="Hard energy cap (kWh/m2 per cycle) for *_energy modes.",
     )
     parser.add_argument(
+        "--yield-target-annual-kg",
         "--yield-cap-annual-kg",
+        dest="yield_target_annual_kg",
         type=float,
-        default=DEFAULT_YIELD_CAP_ANNUAL_KG,
-        help="Hard annual farm yield cap (kg/year).",
+        default=DEFAULT_YIELD_TARGET_ANNUAL_KG,
+        help="Exact annual farm yield target (kg/year).",
     )
     parser.add_argument(
         "--farm-active-area-m2",
         type=float,
         default=DEFAULT_FARM_ACTIVE_AREA_M2,
-        help="Active productive area (m2) used to enforce annual yield cap.",
+        help="Available active productive area (m2) used to verify exact annual target feasibility.",
     )
     parser.add_argument("--opt-n-init", type=int, default=20)
     parser.add_argument("--opt-n-iter", type=int, default=24)
@@ -255,8 +295,8 @@ def main() -> None:
 
     start_date = _parse_iso_date(args.start_date)
     try:
-        yield_cap_annual_kg, farm_active_area_m2, yield_cap_kg_m2_year = resolve_runtime_yield_cap(
-            yield_cap_annual_kg=float(args.yield_cap_annual_kg),
+        yield_target_annual_kg, farm_active_area_m2, yield_target_kg_m2_year = resolve_runtime_yield_target(
+            yield_target_annual_kg=float(args.yield_target_annual_kg),
             farm_active_area_m2=float(args.farm_active_area_m2),
         )
         energy_constraint_active, energy_cap_kwh_m2 = resolve_runtime_energy_cap(
@@ -291,7 +331,7 @@ def main() -> None:
     controller = AdaptiveController(mode=control_mode)
     runtime_run_id = new_run_id("rt")
     profile_signature = dict_signature(profile_to_dict(profile))
-    projected_annual_yield_kg, projected_metrics = projected_annual_yield_from_profile(
+    _, projected_metrics = projected_annual_yield_from_profile(
         profile=profile,
         mode_base=control_mode,
         farm_active_area_m2=farm_active_area_m2,
@@ -299,16 +339,20 @@ def main() -> None:
     if isinstance(generation_meta, dict):
         derived_meta = (((generation_meta.get("outcome") or {}).get("derived_metrics")) or {})
         try:
-            projected_annual_yield_kg = float(derived_meta.get("dry_yield_kg_m2_year")) * float(farm_active_area_m2)
+            profile_yield_kg_m2_year = float(derived_meta.get("dry_yield_kg_m2_year"))
             projected_metrics = dict(derived_meta)
         except Exception:
-            pass
-    if projected_annual_yield_kg > yield_cap_annual_kg + 1e-9:
+            profile_yield_kg_m2_year = float(projected_metrics.get("dry_yield_kg_m2_year", 0.0))
+    else:
+        profile_yield_kg_m2_year = float(projected_metrics.get("dry_yield_kg_m2_year", 0.0))
+    required_active_area_m2_for_target = float(yield_target_annual_kg) / max(profile_yield_kg_m2_year, 1e-9)
+    if required_active_area_m2_for_target > float(farm_active_area_m2) + 1e-9:
         raise SystemExit(
-            "Profile violates hard annual yield cap: "
-            f"{projected_annual_yield_kg:.3f} kg/year > {yield_cap_annual_kg:.3f} kg/year. "
-            "Adjust --yield-cap-annual-kg / --farm-active-area-m2 or regenerate profile."
+            "Profile cannot satisfy exact annual yield target with available active area: "
+            f"required_area={required_active_area_m2_for_target:.3f} m2 > available_area={farm_active_area_m2:.3f} m2. "
+            "Increase --farm-active-area-m2 or reduce --yield-target-annual-kg."
         )
+    projected_annual_yield_kg = float(yield_target_annual_kg)
     try:
         profile_energy_kwh_m2 = resolve_profile_energy_kwh_m2_cycle(projected_metrics)
     except ValueError as exc:
@@ -319,6 +363,14 @@ def main() -> None:
             f"{profile_energy_kwh_m2:.3f} kWh/m2 > {energy_cap_kwh_m2:.3f} kWh/m2. "
             "Raise --energy-cap-kwh-m2 or regenerate/provide a lower-energy profile."
         )
+    try:
+        projected_cycle_quality_index = _validate_profile_quality_floor(
+            profile=profile,
+            control_mode=control_mode,
+            quality_floor=float(args.quality_floor),
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc))
     mpc_supervisor: Optional[MPCSupervisor] = None
     if args.use_mpc_supervisor:
         mpc_supervisor = MPCSupervisor(
@@ -392,14 +444,20 @@ def main() -> None:
         "git_commit": git_commit_short(),
         "profile_signature": profile_signature,
         "stages": profile.stage_days,
-        "yield_cap_annual_kg": float(yield_cap_annual_kg),
+        "yield_target_annual_kg": float(yield_target_annual_kg),
         "farm_active_area_m2": float(farm_active_area_m2),
-        "yield_cap_kg_m2_year": float(yield_cap_kg_m2_year),
+        "yield_target_kg_m2_year": float(yield_target_kg_m2_year),
+        "yield_cap_annual_kg": float(yield_target_annual_kg),
+        "yield_cap_kg_m2_year": float(yield_target_kg_m2_year),
         "projected_annual_yield_kg": float(projected_annual_yield_kg),
         "projected_annual_yield_kg_m2": float(projected_metrics.get("dry_yield_kg_m2_year", 0.0)),
+        "planned_active_area_m2_for_target": float(required_active_area_m2_for_target),
+        "planned_active_area_utilization_frac": float(required_active_area_m2_for_target / max(float(farm_active_area_m2), 1e-9)),
         "projected_cycle_energy_kwh_m2": float(profile_energy_kwh_m2),
+        "projected_cycle_quality_index": float(projected_cycle_quality_index) if projected_cycle_quality_index is not None else None,
         "energy_constraint_active": bool(energy_constraint_active),
         "energy_cap_kwh_m2": float(energy_cap_kwh_m2) if energy_constraint_active else None,
+        "quality_floor": float(args.quality_floor) if control_mode == "max_yield" else None,
     }
     if generation_meta is not None:
         start_event["generation_meta"] = {
@@ -591,6 +649,9 @@ def main() -> None:
                 "profile_signature": profile_signature,
             },
         }
+        power_obs = _extract_power_observability(payload)
+        if power_obs:
+            out["energy_observability_kw"] = power_obs
         if mpc_meta is not None:
             out["mpc"] = mpc_meta
         emit_output(

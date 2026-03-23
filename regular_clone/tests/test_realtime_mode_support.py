@@ -3,13 +3,14 @@ import unittest
 from unittest.mock import patch
 
 from core.mpc_supervisor import MPCSupervisor
+from core.model import StrategyBuilder
 from core.realtime_io import (
     _extract_profile_dict,
     resolve_profile_energy_kwh_m2_cycle,
     resolve_runtime_energy_cap,
     runtime_base_mode,
 )
-from controller_literature_realtime import _runtime_base_mode, parse_args
+from controller_literature_realtime import _runtime_base_mode, _validate_profile_quality_floor, parse_args
 
 
 def _profile_stub() -> dict:
@@ -23,6 +24,19 @@ def _profile_stub() -> dict:
 
 
 class RealtimeModeSupportTests(unittest.TestCase):
+    def test_profile_json_quality_floor_is_validated_for_max_yield(self) -> None:
+        builder = StrategyBuilder()
+        bounds = builder.parameter_bounds()
+        params = {k: (v.lo + v.hi) / 2.0 for k, v in bounds.items()}
+        profile = builder.build(p=params, mode="max_yield")
+
+        quality = _validate_profile_quality_floor(profile=profile, control_mode="max_yield", quality_floor=62.0)
+        self.assertIsNotNone(quality)
+        self.assertGreaterEqual(float(quality), 62.0)
+
+        with self.assertRaises(ValueError):
+            _validate_profile_quality_floor(profile=profile, control_mode="max_yield", quality_floor=99.0)
+
     def test_runtime_base_mode_mapping_is_consistent(self) -> None:
         self.assertEqual(runtime_base_mode("max_yield"), "max_yield")
         self.assertEqual(runtime_base_mode("max_quality"), "max_quality")
@@ -53,7 +67,9 @@ class RealtimeModeSupportTests(unittest.TestCase):
                 "max_yield_energy",
                 "--energy-cap-kwh-m2",
                 "640",
-                "--yield-cap-annual-kg",
+                "--quality-floor",
+                "63",
+                "--yield-target-annual-kg",
                 "80",
                 "--farm-active-area-m2",
                 "120",
@@ -62,7 +78,8 @@ class RealtimeModeSupportTests(unittest.TestCase):
             args = parse_args()
         self.assertEqual(args.mode, "max_yield_energy")
         self.assertAlmostEqual(float(args.energy_cap_kwh_m2), 640.0, places=9)
-        self.assertAlmostEqual(float(args.yield_cap_annual_kg), 80.0, places=9)
+        self.assertAlmostEqual(float(args.quality_floor), 63.0, places=9)
+        self.assertAlmostEqual(float(args.yield_target_annual_kg), 80.0, places=9)
         self.assertAlmostEqual(float(args.farm_active_area_m2), 120.0, places=9)
 
     def test_runtime_energy_cap_resolution(self) -> None:
