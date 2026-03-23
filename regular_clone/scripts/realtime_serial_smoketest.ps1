@@ -4,11 +4,13 @@ param(
 
     [int]$SerialBaud = 115200,
 
-    [ValidateSet("max_yield", "max_quality")]
+    [ValidateSet("max_yield", "max_quality", "max_yield_energy", "max_quality_energy")]
     [string]$Mode = "max_yield",
 
     [double]$WatchdogTimeoutS = 5.0,
     [int]$MaxSamples = 20,
+    [double]$YieldCapAnnualKg = 80.0,
+    [double]$FarmActiveAreaM2 = 1.0,
 
     [string]$ProfileJson = "",
     [switch]$UseMpcSupervisor,
@@ -37,6 +39,8 @@ $args = @(
     "--serial-port", $SerialPort,
     "--serial-baud", "$SerialBaud",
     "--watchdog-timeout-s", "$WatchdogTimeoutS",
+    "--yield-cap-annual-kg", "$YieldCapAnnualKg",
+    "--farm-active-area-m2", "$FarmActiveAreaM2",
     "--max-samples", "$MaxSamples",
     "--out-jsonl", $OutJsonl,
     "--store-db", $StoreDb
@@ -57,4 +61,3 @@ if ($UseMpcSupervisor) {
 
 Write-Host "Running serial realtime smoke test on $SerialPort @ $SerialBaud baud..."
 & $pythonExe @args
-

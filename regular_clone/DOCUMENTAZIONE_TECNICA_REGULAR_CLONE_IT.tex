@@ -1,0 +1,910 @@
+﻿\documentclass[11pt,a4paper]{report}
+
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[italian]{babel}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{fancyhdr}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  urlcolor=blue!50!black,
+  pdftitle={Documentazione Tecnica regular\_clone},
+  pdfauthor={Team Progetto}
+}
+
+\lstdefinelanguage{json}{
+  basicstyle=\ttfamily\small,
+  numbers=left,
+  numberstyle=\scriptsize\color{gray},
+  stepnumber=1,
+  numbersep=8pt,
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{black!20},
+  backgroundcolor=\color{black!2},
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  frame=single,
+  breaklines=true,
+  backgroundcolor=\color{black!2},
+  rulecolor=\color{black!20}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{regular\_clone}
+\fancyhead[R]{Documentazione Tecnica}
+\fancyfoot[C]{\thepage}
+\setlength{\headheight}{14pt}
+
+\setlist[itemize]{topsep=2pt,itemsep=2pt,parsep=0pt}
+\setlist[enumerate]{topsep=2pt,itemsep=2pt,parsep=0pt}
+
+\title{
+  \vspace{2cm}
+  \textbf{Documentazione Tecnica del Progetto regular\_clone}\\
+  \large Allineamento codice-runtime e metodologia produttiva
+}
+\author{Team Progetto}
+\date{22 Marzo 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\chapter{Document Control}
+
+\section{Revision History}
+\begin{longtable}{@{}p{2.2cm}p{2.2cm}p{3.6cm}p{6.8cm}@{}}
+\toprule
+Versione & Data & Autore & Descrizione \\ \midrule
+1.4 & 2026-03-22 & Team progetto & Enforcement hard del cap energia in realtime anche con \texttt{--profile-json} (\texttt{controller\_literature\_realtime.py} e \texttt{core/realtime\_io.py}); aggiornamento sezione test/coerenza. \\
+1.3 & 2026-03-22 & Team progetto & Introduzione vincolo hard \texttt{yield\_cap\_annual\_kg} in optimizer/realtime, planner default a 80 kg/anno, integrazione modulo economico locale \texttt{Analisi economica/cea\_economic\_analysis.py}. \\
+1.2 & 2026-03-22 & Team progetto & Supporto nativo realtime per \texttt{max\_yield\_energy}/\texttt{max\_quality\_energy} e sezione esplicativa ad alto livello per stakeholder non tecnici. \\
+1.1 & 2026-03-22 & Team progetto & Riorganizzazione capitolo fenologico: parametri \texttt{10--14 gg germinazione} e \texttt{27--35 gg seed->talea} dichiarati hard-coded con evidenza implementativa. \\
+1.0 & 2026-03-22 & Team progetto & Prima emissione tecnica dedicata al runtime \texttt{regular\_clone}, con policy codice dominante e mappa scostamenti dal business plan. \\
+\bottomrule
+\end{longtable}
+
+\section{Scopo del documento}
+Questo documento definisce l'architettura tecnica, la formulazione tecnico-matematica e le procedure operative del progetto \texttt{regular\_clone}.\\
+La fonte implementativa primaria e il codice del repository corrente (\texttt{regular\_clone/*}).\\
+La fonte metodologica di riferimento e il documento interno \emph{BUISNESS PLAN (1)}.
+
+\section{Perimetro e policy}
+\begin{itemize}
+  \item \textbf{Policy di allineamento}: codice dominante.
+  \item \textbf{Uso del business plan}: riferimento metodologico per ciclo da talea, schema impiantistico DWC/NFT, gestione soluzione nutritiva e zoning operativo.
+  \item \textbf{Scostamenti}: riportati esplicitamente nel Capitolo 14.
+\end{itemize}
+
+\newpage
+\chapter{Executive Technical Overview}
+
+\section{Obiettivo del sistema}
+Il sistema implementa due anelli integrati:
+\begin{enumerate}
+  \item \textbf{Anello strategico offline}: ottimizzazione constrained Bayesian (\texttt{optimizer\_literature\_best.py}) su digital twin.
+  \item \textbf{Anello operativo realtime}: controllo adattivo closed-loop (\texttt{controller\_literature\_realtime.py}) con quality gate, fallback di sicurezza e supervisione MPC opzionale.
+\end{enumerate}
+
+\section{Modalita operative}
+Modalita supportate dall'optimizer e dal controller realtime:
+\begin{itemize}
+  \item \texttt{max\_yield}
+  \item \texttt{max\_quality}
+  \item \texttt{max\_yield\_energy}
+  \item \texttt{max\_quality\_energy}
+\end{itemize}
+Le varianti \texttt{*\_energy} introducono un vincolo hard su energia per ciclo
+(\texttt{energy\_cap\_kwh\_m2}, default 700.0, configurabile da CLI).\\
+Tutte le modalita introducono inoltre un vincolo hard di resa annua farm-level
+(\texttt{yield\_cap\_annual\_kg}, default 80.0) convertito internamente in
+\texttt{kg/m2/year} tramite \texttt{farm\_active\_area\_m2}.\\
+Nel loop di controllo, le modalita \texttt{*\_energy} usano la stessa logica closed-loop della modalita base corrispondente
+(\texttt{max\_yield} oppure \texttt{max\_quality}), ma operano su un profilo ottimizzato con vincolo energetico.
+Se viene passato un profilo esterno (\texttt{--profile-json}), il runtime valida comunque in avvio che
+\texttt{energy\_kwh\_m2\_cycle <= energy\_cap\_kwh\_m2} per le modalita \texttt{*\_energy}.
+
+\section{Come funziona in modo semplice (per investitori)}
+Il sistema puo essere letto come una piattaforma di gestione rischio-rendimento per una farm idroponica:
+\begin{enumerate}
+  \item si calibra il modello su una postazione pilota, per allineare simulazione e comportamento reale;
+  \item si genera una ricetta ottimale di ciclo (resa o qualita), con eventuale tetto energetico compatibile col budget;
+  \item si applica un cap hard di produzione annua per mantenere la farm entro il budget/obiettivo commerciale;
+  \item in produzione i sensori misurano ogni giorno (o tick) lo stato reale della coltura e dell'ambiente;
+  \item il controller confronta reale e target, calcola correzioni operative e invia comandi agli attuatori;
+  \item ogni decisione e tracciata (DB + log), cosi da auditare performance, sicurezza e costi energetici.
+\end{enumerate}
+In termini economici, il valore e trasformare un processo agricolo complesso in una procedura controllabile,
+misurabile e ripetibile, con compromesso esplicito tra produttivita e consumo energia.
+
+\section{KPI ufficiali}
+\begin{longtable}{@{}p{4.0cm}p{4.0cm}p{5.8cm}@{}}
+\toprule
+KPI & Campo runtime & Significato \\ \midrule
+Resa areale & \texttt{dry\_yield\_g\_m2} & Produzione secca per m2 a fine ciclo. \\
+Qualita sintetica & \texttt{quality\_index} & Indice 0--100 derivato da segnali spettro/stress/salute. \\
+Energia ciclo & \texttt{energy\_kwh\_m2} & Energia per m2 per ciclo (LED + HVAC proxy). \\
+Efficienza energetica & \texttt{g\_per\_kwh} & Resa secca per kWh. \\
+Rischio processo & \texttt{penalty} & Penalita da violazioni VPD, pH, EC, DO, RH. \\
+Rischio fitosanitario & \texttt{disease\_pressure}, \texttt{hlvd\_pressure} & Proxy cumulativi sanitari. \\
+Robustezza BO & \texttt{feasibility\_violation}, \texttt{uncertainty} & Coerenza vincoli e dispersione multi-run. \\
+\bottomrule
+\end{longtable}
+
+\section{Allineamento metodologico di alto livello}
+Elementi del business plan direttamente riflessi nel runtime:
+\begin{itemize}
+  \item ciclo produttivo da talea;
+  \item \texttt{propagation\_system = DWC};
+  \item \texttt{production\_system = NFT\_recirculating};
+  \item fotoperiodicita controllata in fase di fioritura.
+\end{itemize}
+
+\newpage
+\chapter{Architettura Software}
+
+\section{Layer applicativi}
+\begin{longtable}{@{}p{2.8cm}p{5.0cm}p{7.2cm}@{}}
+\toprule
+Layer & File principali & Responsabilita \\ \midrule
+Knowledge & \texttt{core/genetics.py}, \texttt{core/literature.py}, \texttt{configs/*.json} & Profili genetici, priors cultivar, registry fonti, override bounds/coefficenti. \\
+Model & \texttt{core/model.py} & Dataclass dominio, builder profilo strategico, controller adattivo, digital twin, serializzazione profilo/outcome. \\
+Optimization & \texttt{optimizer\_literature\_best.py} & Constrained BO multi-GP con restart robusti e stima incertezza ensemble. \\
+Realtime & \texttt{controller\_literature\_realtime.py}, \texttt{core/realtime\_io.py}, \texttt{core/mpc\_supervisor.py} & Ingestione payload multi-source, quality gate, fallback, emissione setpoint e MPC opzionale. \\
+Observability & \texttt{core/storage.py}, \texttt{core/alerting.py}, \texttt{dashboard\_timeseries.py} & Persistenza SQLite, alerting rolling-window, dashboard HTML. \\
+Calibration & \texttt{calibrate\_twin.py} & Fit parametri del twin su cicli osservati (train/val, bootstrap, governance). \\
+Planning & \texttt{core/production\_planner.py}, \texttt{scripts/plan\_clone\_logistics.py} & Pianificazione logistica multi-ciclo talee con vincoli hard. \\
+Validation & \texttt{tests/test\_*.py}, \texttt{scripts/run\_tests.ps1} & Verifica funzionale unit/e2e, sicurezza realtime, vincoli regular, planner. \\
+\bottomrule
+\end{longtable}
+
+\section{Data flow end-to-end}
+\begin{enumerate}
+  \item caricamento profilo genetico/cultivar e bounds;
+  \item calibrazione twin opzionale (\texttt{calibrate\_twin.py});
+  \item ottimizzazione profilo con BO constrained;
+  \item persistenza run optimizer su \texttt{optimizer\_runs};
+  \item ingestione realtime payload sensore;
+  \item quality gate sensori e gestione fault;
+  \item correzione euristica setpoint baseline;
+  \item raffinamento MPC opzionale;
+  \item emissione \texttt{control\_tick} su stdout/JSONL/sink attuatore;
+  \item logging DB e dashboard.
+\end{enumerate}
+
+\section{Mappa zone capannone vs dominio software}
+\begin{longtable}{@{}p{4.2cm}p{4.0cm}p{6.8cm}@{}}
+\toprule
+Zona business plan & Copertura nel runtime & Note \\ \midrule
+Zona talee (DWC) & \texttt{stage = propagation} & Coerente: propagazione in ambiente separato e conservativo. \\
+Zona vegetativa (NFT) & \texttt{stage = vegetative} & Coerente: setpoint vegetativi e gestione nutrizione/traspirazione. \\
+Zona fioritura (NFT/contesto serra) & \texttt{stage = flower\_early/flower\_late} & Coerente sul dominio colturale; il dettaglio serra naturale non e simulato esplicitamente. \\
+Laboratorio + dry room + magazzino & Non modellati in logica di controllo & Trattati come perimetro operativo extra-software. \\
+\bottomrule
+\end{longtable}
+
+\newpage
+\chapter{Parametrizzazione Fenologica e Spazio Decisionale}
+
+\section{Fasi fenologiche}
+Ordine runtime:
+\[
+\texttt{propagation} \rightarrow \texttt{vegetative} \rightarrow \texttt{transition} \rightarrow \texttt{flower\_early} \rightarrow \texttt{flower\_late}
+\]
+
+\section{Vincoli varietali e produttivi runtime}
+Il profilo di default e \texttt{regular\_photoperiodic} con famiglia default \texttt{indica\_dominant}.\\
+Il \texttt{StrategyBuilder} impone durate hard per famiglia.
+
+\begin{longtable}{@{}p{3.2cm}p{1.5cm}p{1.5cm}p{1.5cm}p{1.7cm}p{1.5cm}p{2.2cm}@{}}
+\toprule
+Famiglia & Prop. & Veg. & Trans. & Flower early & Flower late & Densita fioritura \\ \midrule
+\texttt{indica\_dominant} & 12 & 24 & 7 & 32 & 30 & 4.0 pl/m2 \\
+\texttt{sativa\_dominant} & 12 & 27 & 7 & 37 & 37 & 2.0 pl/m2 \\
+\texttt{hybrid} & 12 & 26 & 7 & 34 & 33 & 3.0 pl/m2 \\
+\bottomrule
+\end{longtable}
+
+Nel metadata profilo sono registrati anche:
+\begin{itemize}
+  \item \texttt{business\_plan\_cuttings\_per\_plant = 5.0};
+  \item \texttt{business\_plan\_no\_dedicated\_mother\_plants = True};
+  \item finestra \texttt{seed\_to\_cutting} hard-coded: 27.0--35.0 giorni.
+\end{itemize}
+
+\section{Vincoli hard pre-ciclo (seme -> talea)}
+I parametri pre-ciclo sono trattati come \textbf{costanti hard-coded} e non vengono ottimizzati dalla BO.
+Essi sono usati per governance del profilo e tracciabilita metodologica.
+
+\begin{longtable}{@{}p{4.2cm}p{2.0cm}p{3.2cm}p{4.0cm}@{}}
+\toprule
+Parametro & Valore hard & Implementazione & Impatto runtime \\ \midrule
+\texttt{SEED\_GERMINATION\_DAYS\_RANGE} & 10--14 gg & \texttt{core/model.py} & Metadata profilo \texttt{business\_plan\_seed\_germination\_days\_min/max}. \\
+\texttt{SEEDLING\_TO\_CUTTING\_DAYS\_RANGE} & 17--21 gg & \texttt{core/model.py} & Composizione finestra \texttt{seed->talea}. \\
+\texttt{business\_plan\_seed\_to\_cutting\_days} & 27--35 gg & \texttt{core/model.py} & Tracciabilita tecnica del lead time pre-ciclo. \\
+\bottomrule
+\end{longtable}
+
+Nota di perimetro: il ciclo simulato dal twin e dal controller realtime parte dalla talea distaccata
+(\texttt{cutting\_cycle\_start = detached\_cutting}); la finestra \texttt{seed->talea} e quindi un vincolo hard pre-ciclo,
+non un intervallo ottimizzabile nel loop giornaliero di controllo.
+
+\section{Spazio parametrico ottimizzato (literature baseline)}
+Bounds del costruttore \texttt{CannabisYieldLiteratureBuilder}:
+\begin{longtable}{@{}p{3.4cm}p{1.2cm}p{1.2cm}p{2.0cm}p{5.0cm}@{}}
+\toprule
+Parametro & Min & Max & Unita & Fonte primaria runtime \\ \midrule
+\texttt{veg\_ppfd} & 360 & 850 & umol m$^{-2}$ s$^{-1}$ & \texttt{rodriguez\_morrison\_2021\_light} \\
+\texttt{flower\_ppfd} & 900 & 1800 & umol m$^{-2}$ s$^{-1}$ & \texttt{rodriguez\_morrison\_2021\_light} \\
+\texttt{flower\_photoperiod\_h} & 12.0 & 14.0 & h & \texttt{ahrens\_2023\_is\_twelve\_hours}, \texttt{ahrens\_2024\_13h\_photoperiod} \\
+\texttt{co2\_flower\_ppm} & 450 & 1200 & ppm & letteratura fisiologica CO2 \\
+\texttt{air\_temp\_day\_c} & 23.0 & 29.0 & degC & letteratura CEA cannabis indoor \\
+\texttt{rh\_day\_pct} & 50 & 70 & \% & modello VPD e rischio patogeni \\
+\texttt{ec\_veg} & 1.4 & 2.4 & mS/cm & \texttt{saloner\_2020\_n} \\
+\texttt{ec\_flower} & 1.8 & 3.0 & mS/cm & \texttt{saloner\_2019\_k}, \texttt{powell\_2026\_mass\_balance} \\
+\texttt{ph\_target} & 5.7 & 6.2 & pH & \texttt{powell\_2026\_mass\_balance} \\
+\texttt{n\_mg\_l} & 140 & 240 & mg/L & \texttt{saloner\_2020\_n} \\
+\texttt{p\_mg\_l} & 15 & 60 & mg/L & registry nutrizione runtime \\
+\texttt{k\_mg\_l} & 60 & 240 & mg/L & \texttt{saloner\_2019\_k} \\
+\texttt{blue\_flower\_frac} & 0.10 & 0.28 & frazione & \texttt{holweg\_2024\_red\_white\_spectra} \\
+\texttt{far\_red\_flower\_frac} & 0.02 & 0.14 & frazione & \texttt{holweg\_2024\_red\_white\_spectra} \\
+\texttt{uvb\_late\_frac} & 0.00 & 0.10 & frazione & \texttt{llewellyn\_2023\_uv\_minimal\_effect} \\
+\texttt{veg\_days} & 20 & 34 & giorni & mantenuto per retrocompatibilita BO \\
+\texttt{flower\_total\_days} & 58 & 78 & giorni & mantenuto per retrocompatibilita BO \\
+\texttt{flower\_early\_days} & 24 & 44 & giorni & mantenuto per retrocompatibilita BO \\
+\bottomrule
+\end{longtable}
+
+\section{Override genetici/famiglia/cultivar}
+Precedenza effettiva dei bounds:
+\[
+\texttt{literature\_bounds} \rightarrow \texttt{genetic\_bound\_overrides} \rightarrow \texttt{family\_bound\_overrides} \rightarrow \texttt{cultivar\_bound\_overrides}
+\]
+I coefficienti modello sono composti in modo moltiplicativo:
+\[
+c_k = c^{base}_k \cdot c^{family}_k \cdot c^{cultivar}_k
+\]
+con clamp numerici applicati nel twin (\texttt{yield\_potential\_scale}, \texttt{quality\_potential\_scale}, \texttt{disease\_pressure\_scale}, \texttt{hlvd\_pressure\_scale}, \texttt{nutrient\_window\_scale}).
+
+\section{Evidenze bibliografiche in registry}
+\begin{longtable}{@{}p{3.7cm}p{0.9cm}p{2.3cm}p{7.0cm}@{}}
+\toprule
+\texttt{source\_id} & Anno & Compat. regular & Citazione sintetica \\ \midrule
+\texttt{knight\_2010\_scrog\_hydroponic} & 2010 & no & Knight et al., Forensic Sci Int. \\
+\texttt{saloner\_2019\_k} & 2019 & yes & Saloner et al., Front Plant Sci. \\
+\texttt{saloner\_2020\_n} & 2020 & yes & Saloner et al., Front Plant Sci. \\
+\texttt{rodriguez\_morrison\_2021\_light} & 2021 & yes & Rodriguez-Morrison et al., Front Plant Sci. \\
+\texttt{dowling\_2022\_photoperiod\_meta} & 2022 & yes & Dowling et al., Front Plant Sci. \\
+\texttt{moher\_2021\_photoperiodic\_response\_in\_vitro} & 2021 & yes & Moher et al., HortScience. \\
+\texttt{ahrens\_2023\_is\_twelve\_hours} & 2023 & yes & Ahrens et al., Plants. \\
+\texttt{ahrens\_2024\_13h\_photoperiod} & 2024 & yes & Ahrens et al., Plants. \\
+\texttt{llewellyn\_2023\_uv\_minimal\_effect} & 2021 & yes & Rodriguez-Morrison et al., UV-B. \\
+\texttt{holweg\_2024\_red\_white\_spectra} & 2024 & yes & Holweg et al., Front Plant Sci. \\
+\texttt{powell\_2026\_mass\_balance} & 2026 & yes & Powell et al., Front Plant Sci. \\
+\texttt{pitman\_2020\_pythium\_report} & 2021 & yes & Pitman et al., Plant Disease. \\
+\texttt{punja\_2025\_hlvd\_management} & 2025 & yes & Punja, Plants. \\
+\texttt{ioannidis\_2022\_ssr\_micropropagation} & 2022 & yes & Ioannidis et al., Plants. \\
+\bottomrule
+\end{longtable}
+
+\newpage
+\chapter{Formulazione Tecnico-Matematica del Modello}
+
+\section{Variabili derivate}
+\subsection*{VPD}
+\begin{equation}
+\mathrm{VPD} = e_s(T_{air}) - e_a(T_{air}, RH)
+\end{equation}
+\begin{equation}
+e_s = 0.6108\exp\left(\frac{17.27T}{T+237.3}\right), \quad e_a = e_s\frac{RH}{100}
+\end{equation}
+
+\subsection*{DLI}
+\begin{equation}
+\mathrm{DLI} = 0.0036 \cdot \mathrm{PPFD} \cdot \mathrm{photoperiod\_h}
+\end{equation}
+
+\section{Dinamica giornaliera}
+Il twin usa aggiornamenti laggati con rumore gaussiano:
+\begin{equation}
+x_t = \mathrm{clip}(x_{t-1} + \alpha(x^\star - x_{t-1}) + \epsilon_t)
+\end{equation}
+dove \(\epsilon_t \sim \mathcal{N}(0,\sigma^2)\), con \(\alpha\) e \(\sigma\) specifici per variabile (\texttt{t\_air\_c}, \texttt{rh\_pct}, \texttt{co2\_ppm}, \texttt{ppfd}, \texttt{t\_solution\_c}, \texttt{ec\_ms\_cm}, \texttt{ph}, \texttt{do\_mg\_l}).
+
+\section{Funzioni di risposta}
+\begin{equation}
+f_G(x)=\exp\left(-\frac{(x-\mu)^2}{2\sigma^2}\right), \qquad
+f_L(x)=\frac{1}{1+\exp\left(-\frac{x-c}{s}\right)}
+\end{equation}
+Le funzioni gaussiane/logistiche sono usate per temperatura, VPD, nutrizione, root-zone, CO2 e spettro.
+
+\section{Pesi fenologici e gain}
+\begin{longtable}{@{}p{3.2cm}p{2.0cm}p{2.0cm}p{6.8cm}@{}}
+\toprule
+Fase & Peso resa & Peso qualita & Uso nel modello \\ \midrule
+\texttt{propagation} & 0.06 & 0.00 & rooting e stabilizzazione iniziale \\
+\texttt{vegetative} & 0.32 & 0.06 & espansione canopy \\
+\texttt{transition} & 0.78 & 0.20 & transizione fisiologica \\
+\texttt{flower\_early} & 1.28 & 0.75 & bulk resa fioritura \\
+\texttt{flower\_late} & 1.06 & 1.15 & maturazione qualita \\
+\bottomrule
+\end{longtable}
+
+\begin{equation}
+\Delta Y_t = \mathrm{DLI}_t \cdot 0.52 \cdot w_Y(stage) \cdot canopy \cdot \Phi_{growth} \cdot health
+\end{equation}
+\begin{equation}
+\Delta Q_t = w_Q(stage)\cdot \Phi_{spectrum,stress,root,health}
+\end{equation}
+con scaling da coefficienti genetici/famiglia/cultivar e da \texttt{TwinCalibration}.
+
+\section{Penalty e rischio fitosanitario}
+Incremento \texttt{disease\_pressure}:
+\begin{equation}
+\Delta D_t = 0.020\max(RH-72,0)+0.090\max(0.82-VPD,0)+0.070\max(T_{sol}-22,0)+0.095\max(7-DO,0)
+\end{equation}
+Incremento \texttt{hlvd\_pressure}:
+\begin{equation}
+\Delta H_t = \left(0.0018(1-s)+0.0008\Delta D_t\right)\cdot scale_{hlvd}
+\end{equation}
+dove \(s\) e \texttt{sanitation\_level}.\\
+La penalty aggrega eccessi/deficit su VPD, pH, EC, DO e RH in fioritura.
+
+\newpage
+\chapter{Controller Adattivo Closed Loop}
+
+\section{Target VPD fase-specifici}
+\begin{longtable}{@{}p{3.4cm}p{3.0cm}p{7.4cm}@{}}
+\toprule
+Fase & Target VPD (kPa) & Effetto operativo \\ \midrule
+\texttt{propagation} & 0.40--0.80 & minimizzazione stress idrico iniziale \\
+\texttt{vegetative} & 0.80--1.20 & sostegno crescita vegetativa \\
+\texttt{transition} & 1.00--1.35 & passaggio fenologico controllato \\
+\texttt{flower\_early} & 1.10--1.45 & robustezza set infiorescenze \\
+\texttt{flower\_late} & 1.00--1.35 & compromesso resa/qualita/rischio \\
+\bottomrule
+\end{longtable}
+
+\section{Regole di controllo implementate}
+Azioni principali in \texttt{AdaptiveController.adjust()}:
+\begin{enumerate}
+  \item \texttt{raise\_vpd} / \texttt{lower\_vpd}
+  \item \texttt{dli\_recovery}
+  \item \texttt{raise\_ph} / \texttt{lower\_ph}
+  \item \texttt{raise\_ec} / \texttt{lower\_ec}
+  \item \texttt{uptake\_balance\_high\_transpiration} / \texttt{uptake\_balance\_low\_transpiration}
+  \item \texttt{cool\_root\_zone}, \texttt{raise\_do}
+  \item \texttt{quality\_spectral\_shift} o \texttt{yield\_spectral\_shift} in \texttt{flower\_late}
+\end{enumerate}
+
+\section{Interazione con quality-gate e fallback}
+Pipeline operativa per ciascun tick:
+\begin{enumerate}
+  \item parsing payload (\texttt{sensor\_payload\_to\_state});
+  \item valutazione qualita sensore (\texttt{evaluate\_sensor\_quality});
+  \item fallback safe su payload invalidi, stream error/idle, hard fault sensore;
+  \item enforce limiti hard/rate (\texttt{enforce\_setpoint\_limits});
+  \item MPC opzionale (\texttt{--use-mpc-supervisor});
+  \item emissione \texttt{control\_tick}.
+\end{enumerate}
+
+\newpage
+\chapter{Digital Twin: Dettagli Implementativi}
+
+\section{Ciclo di simulazione}
+\texttt{CEADigitalTwin.simulate\_cycle()}:
+\begin{enumerate}
+  \item inizializza stato da \texttt{propagation};
+  \item determina fase attiva per giorno;
+  \item applica controllo adattivo;
+  \item avanza stato con \texttt{\_advance\_one\_day};
+  \item accumula yield/quality/energy/penalty;
+  \item applica correttivi finali malattia/HLVd + \texttt{TwinCalibration} post-ciclo.
+\end{enumerate}
+
+\section{Robustezza numerica e guardrail}
+\begin{itemize}
+  \item clipping sistematico su variabili fisiche;
+  \item seed espliciti per riproducibilita;
+  \item clamp parametri calibrazione (\texttt{clamp\_twin\_calibration});
+  \item normalizzazione spettro (\texttt{\_normalize\_spectrum}).
+\end{itemize}
+
+\section{Parametri di calibrazione twin}
+\begin{longtable}{@{}p{4.0cm}p{2.2cm}p{2.2cm}p{5.0cm}@{}}
+\toprule
+Parametro & Min & Max & Ruolo \\ \midrule
+\texttt{yield\_gain\_scale} & 0.60 & 1.60 & scaling gain giornaliero resa \\
+\texttt{quality\_gain\_scale} & 0.60 & 1.60 & scaling gain giornaliero qualita \\
+\texttt{transpiration\_scale} & 0.60 & 1.60 & scaling proxy traspirazione \\
+\texttt{disease\_inc\_scale} & 0.50 & 2.00 & scala crescita pressione patogena \\
+\texttt{hlvd\_inc\_scale} & 0.50 & 2.00 & scala crescita pressione HLVd \\
+\texttt{penalty\_scale} & 0.50 & 2.50 & scala penalty di processo \\
+\texttt{energy\_scale} & 0.60 & 1.80 & scala consumo energetico \\
+\texttt{yield\_post\_scale} & 0.70 & 1.30 & scala resa post-ciclo \\
+\texttt{quality\_post\_scale} & 0.70 & 1.30 & scala qualita post-ciclo \\
+\texttt{quality\_post\_offset} & -20.0 & 20.0 & offset qualita post-ciclo \\
+\bottomrule
+\end{longtable}
+
+\section{Output strutturato}
+Output nativo:
+\begin{itemize}
+  \item \texttt{CycleOutcome} (KPI aggregati + log giornalieri);
+  \item \texttt{outcome\_to\_dict()} con \texttt{adjustment\_summary} e \texttt{last\_days};
+  \item \texttt{clone\_cycle\_derived\_metrics()} con KPI annualizzati.
+\end{itemize}
+
+\newpage
+\chapter{Constrained Bayesian Optimization}
+
+\section{Obiettivi e vincoli}
+Per \texttt{max\_yield} l'obiettivo primario e \(\max\ \texttt{dry\_yield\_g\_m2}\).\\
+Per \texttt{max\_quality} l'obiettivo primario e \(\max\ \texttt{quality\_index}\) con floor resa \texttt{quality\_y\_min}.\\
+Le varianti \texttt{*\_energy} mantengono l'obiettivo base e aggiungono vincolo hard energia.
+In tutte le modalita e attivo il vincolo hard \texttt{yield\_cap\_annual\_kg} (farm-level),
+tradotto in soglia \texttt{yield\_cap\_kg\_m2\_year} tramite \texttt{farm\_active\_area\_m2}.
+
+\section{Violation function}
+\texttt{\_literature\_violation()} penalizza:
+\begin{itemize}
+  \item fioritura sottodimensionata vs fase vegetativa;
+  \item fotoperiodo fuori finestra 12--14h;
+  \item eccessi di P/EC;
+  \item criticita processo/sanitarie via \texttt{penalty}, \texttt{disease\_pressure}, \texttt{hlvd\_pressure}.
+\end{itemize}
+
+\section{Modello probabilistico multi-GP}
+Modelli Gaussian Process allenati:
+\begin{itemize}
+  \item \texttt{gp\_obj}
+  \item \texttt{gp\_yield}
+  \item \texttt{gp\_violation}
+  \item \texttt{gp\_penalty}
+  \item \texttt{gp\_disease}
+  \item \texttt{gp\_hlvd}
+  \item \texttt{gp\_energy}
+\end{itemize}
+Kernel comune:
+\[
+K = \texttt{ConstantKernel} \times \texttt{Matern}(\nu=2.5) + \texttt{WhiteKernel}
+\]
+
+\section{Acquisition e fattibilita}
+Acquisition:
+\[
+A(x) = EI(x)\cdot P_{feasible}(x)
+\]
+dove:
+\[
+P_{feasible}(x)=P(v\le 0.50)\cdot P(pen\le 15)\cdot P(dis\le 3)\cdot P(hlvd\le 0.08)\cdot P(energy\le cap)\cdot P(yield\ge floor)
+\]
+I fattori energia/floor resa sono attivati in base alla modalita.
+
+\section{Strategia restart e robustezza}
+\begin{itemize}
+  \item \texttt{max\_yield}: restart multipli + robust score Monte Carlo multi-seed.
+  \item \texttt{max\_quality}: restart multipli fino a candidato fattibile.
+  \item incertezza finale: ensemble run con statistiche \texttt{p05/p50/p95}, \texttt{std}, \texttt{feasible\_rate}.
+\end{itemize}
+
+\newpage
+\chapter{Contratto Dati Realtime e Integrazione I/O}
+
+\section{Campi obbligatori e opzionali payload sensore}
+\begin{longtable}{@{}p{3.6cm}p{2.8cm}p{6.8cm}@{}}
+\toprule
+Campo & Tipo & Stato \\ \midrule
+\texttt{t\_air\_c} & float & obbligatorio \\
+\texttt{rh\_pct} & float & obbligatorio \\
+\texttt{co2\_ppm} & float & obbligatorio \\
+\texttt{ppfd} & float & obbligatorio \\
+\texttt{t\_solution\_c} & float & obbligatorio \\
+\texttt{do\_mg\_l} & float & obbligatorio \\
+\texttt{ec\_ms\_cm} & float & obbligatorio \\
+\texttt{ph} & float & obbligatorio \\
+\texttt{timestamp} & ISO string & opzionale \\
+\texttt{transpiration\_l\_m2\_day} & float & opzionale \\
+\texttt{dli\_prev} & float & opzionale \\
+\texttt{vpd\_kpa} & float & opzionale \\
+\texttt{disease\_pressure} & float & opzionale \\
+\texttt{hlvd\_pressure} & float & opzionale \\
+\bottomrule
+\end{longtable}
+
+\section{Sorgenti e sink supportati}
+Sorgenti:
+\begin{itemize}
+  \item \texttt{jsonl\_file}
+  \item \texttt{stdin\_json}
+  \item \texttt{http\_poll}
+  \item \texttt{serial\_json}
+  \item \texttt{mock\_stream}
+\end{itemize}
+Sink:
+\begin{itemize}
+  \item stdout JSON;
+  \item append su JSONL;
+  \item HTTP POST attuatore;
+  \item seriale attuatore.
+\end{itemize}
+
+\section{Schema output \texttt{control\_tick}}
+\begin{longtable}{@{}p{3.8cm}p{9.4cm}@{}}
+\toprule
+Campo & Descrizione \\ \midrule
+\texttt{event} & Evento strutturato (\texttt{control\_tick}). \\
+\texttt{ts} & Timestamp ISO. \\
+\texttt{mode}, \texttt{cycle\_day}, \texttt{stage} & Contesto runtime. \\
+\texttt{actions} & Lista azioni controller/fallback/MPC. \\
+\texttt{sensor} & Stato sensore validato. \\
+\texttt{baseline\_setpoint} & Setpoint nominale stage. \\
+\texttt{heuristic\_setpoint} & Output controller euristico pre-limiti/MPC. \\
+\texttt{recommended\_setpoint} & Setpoint finale emesso. \\
+\texttt{sensor\_quality} & Score + warning + hard fault. \\
+\texttt{mpc} & Diagnostica MPC (se attivo). \\
+\texttt{fault} & Oggetto fault in fallback ticks. \\
+\texttt{governance} & \texttt{run\_id}, \texttt{profile\_signature}. \\
+\bottomrule
+\end{longtable}
+
+\newpage
+\chapter{Runbook Operativo}
+
+\section{Setup ambiente}
+\begin{lstlisting}
+cd regular_clone
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements_realtime_optional.txt
+\end{lstlisting}
+
+\section{Calibrazione twin}
+\begin{lstlisting}
+.\.venv\Scripts\python.exe .\calibrate_twin.py ^
+  --dataset-json .\calibration_dataset_template.json ^
+  --out-json .\runtime\profiles\twin_calibration.json ^
+  --store-db .\runtime\db\cea_timeseries.db
+\end{lstlisting}
+
+\section{Ottimizzazione offline}
+\begin{lstlisting}
+.\.venv\Scripts\python.exe .\optimizer_literature_best.py --mode both --json-only
+\end{lstlisting}
+
+\section{Realtime}
+\textbf{Con auto-generazione profilo}:
+\begin{lstlisting}
+.\.venv\Scripts\python.exe .\controller_literature_realtime.py ^
+  --mode max_yield --source serial_json --serial-port COM4 --serial-baud 115200 ^
+  --watchdog-timeout-s 5 --yield-cap-annual-kg 80 --farm-active-area-m2 120 ^
+  --store-db .\runtime\db\cea_timeseries.db
+\end{lstlisting}
+
+\textbf{Con vincolo energia nativo in realtime}:
+\begin{lstlisting}
+.\.venv\Scripts\python.exe .\controller_literature_realtime.py ^
+  --mode max_yield_energy --energy-cap-kwh-m2 640 ^
+  --yield-cap-annual-kg 80 --farm-active-area-m2 120 ^
+  --source serial_json --serial-port COM4 --serial-baud 115200 ^
+  --start-date 2026-04-01
+\end{lstlisting}
+
+\textbf{Con profilo gia esportato + MPC}:
+\begin{lstlisting}
+.\.venv\Scripts\python.exe .\controller_literature_realtime.py ^
+  --mode max_quality --profile-json .\runtime\profiles\literature_best_profile_runtime.json ^
+  --source mock_stream --use-mpc-supervisor --mpc-horizon 6 --mpc-candidates 96
+\end{lstlisting}
+
+\section{Artefatti runtime}
+\begin{longtable}{@{}p{4.2cm}p{7.8cm}@{}}
+\toprule
+Artefatto & Path default \\ \midrule
+DB SQLite & \texttt{runtime/db/cea\_timeseries.db} \\
+Output JSONL controllo & \texttt{runtime/jsonl/control\_output\_literature\_realtime.jsonl} \\
+Profili runtime & \texttt{runtime/profiles/} \\
+Dashboard HTML & \texttt{runtime/logs/dashboard\_timeseries.html} \\
+\bottomrule
+\end{longtable}
+
+\newpage
+\chapter{Validazione e Test}
+
+\section{Strategia test}
+La validazione copre:
+\begin{itemize}
+  \item unit test su modelli, bounds, qualita sensori, alerting;
+  \item test e2e optimizer e calibrazione;
+  \item test safety realtime (fallback + limiti hard/rate);
+  \item test planner logistico multi-ciclo.
+\end{itemize}
+
+\section{Suite test corrente}
+Comando ufficiale:
+\begin{lstlisting}
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
+\end{lstlisting}
+
+\begin{longtable}{@{}p{5.2cm}p{8.0cm}@{}}
+\toprule
+File test & Copertura \\ \midrule
+\texttt{test\_e2e\_optimizer.py} & Run modes optimizer, metriche derivate clone cycle, varianti energy. \\
+\texttt{test\_e2e\_calibration.py} & E2E CLI calibrazione twin su dataset sintetico. \\
+\texttt{test\_realtime\_safety.py} & Fallback setpoint, emissione fallback tick, limiti hard/rate. \\
+\texttt{test\_realtime\_stream\_events.py} & Eventi stream \texttt{idle/error/valid}. \\
+\texttt{test\_sensor\_quality.py} & Range hard, jump hard/warning, scoring. \\
+\texttt{test\_alerting.py} & Trigger/cooldown alert rolling-window. \\
+\texttt{test\_model\_coefficients.py} & Composizione coefficienti base/famiglia/cultivar. \\
+\texttt{test\_literature\_bounds\_and\_sources.py} & Integrita bounds e registry fonti. \\
+\texttt{test\_reference\_audit\_summary.py} & Sintesi compatibilita referenze per profilo. \\
+\texttt{test\_realtime\_mode\_support.py} & Coerenza mapping modalita energy in realtime + validazione parsing cap energia e helper runtime. \\
+\texttt{test\_regular\_profile\_constraints.py} & Verifica durate/densita hard regular per famiglia e finestra hard \texttt{germinazione/seed->talea}. \\
+\texttt{test\_production\_planner.py} & Vincoli planner 80 kg/anno, check saturazione e rispetto cap annuo da schedule settimanale. \\
+\texttt{test\_economic\_hybrid\_model.py} & Verifica modulo economico locale \texttt{regular\_clone/Analisi economica/cea\_economic\_analysis.py}. \\
+\bottomrule
+\end{longtable}
+
+\section{Criteri minimi di accettazione}
+\begin{enumerate}
+  \item test suite passata al 100\%;
+  \item nessun hard fault sensore non gestito;
+  \item fallback e alert persistiti in DB quando \texttt{--store-db} e attivo;
+  \item coerenza KPI optimizer/realtime con vincoli modalita.
+\end{enumerate}
+
+\newpage
+\chapter{Sicurezza Operativa}
+
+\section{Guardrail minimi}
+\begin{longtable}{@{}p{4.6cm}p{8.6cm}@{}}
+\toprule
+Guardrail & Implementazione \\ \midrule
+Fallback recipe conservativo & \texttt{safe\_fallback\_setpoint()} e \texttt{emit\_safe\_fallback\_tick()}. \\
+Hard limits setpoint & \texttt{enforce\_setpoint\_limits()} con bounds fisici per clima/nutrizione/spettro. \\
+Rate limits per tick & Clamp variazione per \texttt{ppfd}, \texttt{t\_air\_c}, \texttt{rh\_pct}, \texttt{co2\_ppm}, \texttt{t\_solution\_c}, \texttt{do\_mg\_l}, \texttt{ec\_ms\_cm}, \texttt{ph}. \\
+Quality gate sensori & \texttt{evaluate\_sensor\_quality()} con hard faults e warnings. \\
+Watchdog stream & Trigger fallback su timeout (\texttt{--watchdog-timeout-s}). \\
+\bottomrule
+\end{longtable}
+
+\section{Fault handling e policy fallback}
+Eventi fault principali:
+\begin{itemize}
+  \item \texttt{safe\_fallback\_watchdog\_timeout}
+  \item \texttt{safe\_fallback\_source\_error}
+  \item \texttt{safe\_fallback\_sensor\_payload\_error}
+  \item \texttt{safe\_fallback\_sensor\_quality\_fault}
+\end{itemize}
+Ogni fallback genera un \texttt{control\_tick} strutturato con campo \texttt{fault}.
+
+\section{Alerting rolling-window}
+\begin{longtable}{@{}p{4.0cm}p{2.3cm}p{2.3cm}p{4.6cm}@{}}
+\toprule
+Parametro & Default & Campo CLI & Significato \\ \midrule
+Finestra tick & 60 & \texttt{--alert-window-ticks} & ampiezza finestra mobile \\
+Soglia fallback rate & 0.15 & \texttt{--alert-fallback-rate-threshold} & trigger \texttt{fallback\_rate\_high} \\
+Soglia timeout count & 3 & \texttt{--alert-timeout-count-threshold} & trigger \texttt{timeout\_burst} \\
+Soglia payload errors & 3 & \texttt{--alert-payload-error-count-threshold} & trigger \texttt{payload\_error\_burst} \\
+Soglia quality faults & 3 & \texttt{--alert-quality-fault-count-threshold} & trigger \texttt{sensor\_quality\_fault\_burst} \\
+Cooldown & 30 & \texttt{--alert-cooldown-ticks} & anti-ripetizione alert \\
+\bottomrule
+\end{longtable}
+
+\newpage
+\chapter{Traceability e Governance}
+
+\section{Matrice codice -> sezioni}
+\begin{longtable}{@{}p{3.4cm}p{5.8cm}p{5.2cm}@{}}
+\toprule
+Dominio & File fonte di verita & Sezioni documento \\ \midrule
+Architettura complessiva & \texttt{README.md}, entrypoint root, \texttt{core/*.py} & Cap. 2--3 \\
+Fenologia e bounds & \texttt{core/model.py}, \texttt{optimizer\_literature\_best.py}, \texttt{configs/genetic\_profiles.json} & Cap. 4--5 \\
+Controller realtime & \texttt{controller\_literature\_realtime.py}, \texttt{core/realtime\_io.py} & Cap. 6, 9, 12 \\
+MPC supervisor & \texttt{core/mpc\_supervisor.py} & Cap. 6, 12 \\
+BO vincolata & \texttt{optimizer\_literature\_best.py} & Cap. 8 \\
+Modalita realtime energy-constrained & \texttt{controller\_literature\_realtime.py}, \texttt{core/realtime\_io.py}, \texttt{core/mpc\_supervisor.py} & Cap. 2, 6, 10 \\
+Calibrazione twin & \texttt{calibrate\_twin.py} & Cap. 7, 10 \\
+Storage e audit & \texttt{core/storage.py}, \texttt{core/governance.py} & Cap. 10, 13 \\
+Planner logistico & \texttt{core/production\_planner.py} & Cap. 10, 14 \\
+Blocco economico & \texttt{Analisi economica/cea\_economic\_analysis.py} & Cap. 2, 11, 15 \\
+Validazione & \texttt{tests/test\_*.py}, \texttt{scripts/run\_tests.ps1} & Cap. 11 \\
+\bottomrule
+\end{longtable}
+
+\section{Run identity e firme}
+La governance runtime include:
+\begin{itemize}
+  \item \texttt{run\_id} via \texttt{new\_run\_id(prefix)};
+  \item \texttt{git\_commit} via \texttt{git\_commit\_short()};
+  \item firma payload via \texttt{dict\_signature()} (profili/run/runtime);
+  \item firma file via \texttt{file\_signature()} usata nel flusso di calibrazione dataset.
+\end{itemize}
+
+\section{Persistenza auditabile}
+Schema SQLite inizializzato da \texttt{init\_storage()}:
+\begin{itemize}
+  \item \texttt{control\_ticks}
+  \item \texttt{optimizer\_runs}
+  \item \texttt{twin\_calibrations}
+  \item \texttt{alert\_events}
+\end{itemize}
+Ogni tabella mantiene \texttt{payload\_json} completo per audit retrospettivo.
+
+\newpage
+\chapter{Allineamento Metodologico al Business Plan}
+
+\section{Trasposizione metodologia produttiva}
+Mappa sintetica business plan \(\rightarrow\) runtime:
+\begin{longtable}{@{}p{5.0cm}p{3.4cm}p{4.8cm}@{}}
+\toprule
+Elemento business plan & Stato runtime & Evidenza \\ \midrule
+Ciclo da talea & implementato & stage \texttt{propagation} + metadata \texttt{cuttings\_source}. \\
+DWC in radicazione & implementato & \texttt{propagation\_system = DWC}. \\
+NFT in vegetativa/fioritura con ricircolo & implementato & \texttt{production\_system = NFT\_recirculating}. \\
+Gestione nutrizione (EC/pH/NPK) & implementato & setpoint stage + regole controller + penalty model. \\
+Zonizzazione capannone (talee/veg/fioritura) & implementato a livello logico & mapping stage fenologici. \\
+Dry room/laboratorio/magazzino & non modellato nel controllo & perimetro operativo extra-software. \\
+\bottomrule
+\end{longtable}
+
+\section{Scostamenti espliciti BP vs codice}
+\begin{longtable}{@{}p{3.4cm}p{5.0cm}p{5.0cm}@{}}
+\toprule
+Tema & Business plan & Runtime \texttt{regular\_clone} \\ \midrule
+Piante madri dedicate & previste in avvio processo & \texttt{business\_plan\_no\_dedicated\_mother\_plants=True} e source talee da piante in vegetativa. \\
+Densita impianto & riferimenti testuali 15/9 (e passaggi 16 e 6/9) pl/m2 & vincoli hard profilo regular: indica 4, sativa 2, hybrid 3 pl/m2 in fioritura. \\
+Durate fasi iniziali & radicazione circa 15 gg + vegetativa circa 25 gg & vincoli hard pre-ciclo: germinazione 10--14 gg, seed->talea 27--35 gg; da talea a raccolta: 12/24/7/32/30 (indica), 12/27/7/37/37 (sativa). \\
+Contesto serra luce naturale & descritto per risparmio energetico & non modellato come forcing meteorologico/stagionale esplicito. \\
+Zonizzazione non coltiva & dry room/laboratorio/magazzino dettagliati & non presenti nel dominio software di controllo/ottimizzazione. \\
+\bottomrule
+\end{longtable}
+
+\section{Gap metodologici dichiarati}
+\textbf{GAP-01}: il business plan non fornisce setpoint machine-ready completi per ogni fase (T/RH/CO2/EC/pH/DO).\\
+\textbf{GAP-02}: il business plan non formalizza equazioni digital twin/BO/MPC; la formulazione deriva dal codice implementativo.
+
+\section{Implicazioni ingegneristiche degli scostamenti}
+\begin{itemize}
+  \item il runtime e progettato per robustezza software e controllo ripetibile, non per replica letterale della BOM impiantistica;
+  \item le assunzioni hard su ciclo/densita influenzano direttamente KPI annualizzati e piano logistica talee;
+  \item la mancata modellazione meteo-serra suggerisce una roadmap di estensione verso forcing esogeno.
+\end{itemize}
+
+\newpage
+\chapter{Limiti Noti e Roadmap}
+
+\section{Limiti attuali}
+\begin{itemize}
+  \item modello digital twin semplificato (proxy biologici) e non gemello fisico completo;
+  \item MPC candidate-based campionato (non NMPC continuo con solver dedicato);
+  \item assenza modellazione esplicita condizioni meteo/fotoperiodo locale esterno;
+  \item dipendenza dalla qualita dati nel loop realtime e dataset calibrazione.
+\end{itemize}
+
+\section{Roadmap tecnica suggerita}
+\begin{enumerate}
+  \item integrazione forcing meteo/fotoperiodo esterno nel twin e nel controller;
+  \item estensione multi-sito/multi-lotto per calibrazione;
+  \item stima online di stato/parametri (state estimation);
+  \item estensione economico-energetica da caso statico a co-ottimizzazione operativa (oggi il modulo economico e locale ma ancora separato dal loop di controllo).
+\end{enumerate}
+
+\newpage
+\chapter{Riferimenti Tecnici}
+
+\section{Fonti runtime e interne}
+\begin{enumerate}
+  \item Team Progetto CEA (2026). \emph{BUISNESS PLAN (1)}. Documento interno metodologico.
+  \item \texttt{regular\_clone/configs/literature\_sources.json}. Registry fonti con campo \texttt{compatibility\_regular}.
+  \item \texttt{regular\_clone/configs/genetic\_profiles.json}. Profili genetici e override bounds/coefficenti.
+  \item \texttt{regular\_clone/configs/cultivar\_catalog.json}. Priors cultivar e riferimenti associati.
+\end{enumerate}
+
+\section{Letteratura agronomica in registry}
+\begin{enumerate}
+  \item Knight G. et al. (2010), Forensic Sci Int. 202(1-3):36-44.
+  \item Saloner A. et al. (2019), Front Plant Sci. 10:1369.
+  \item Saloner A. et al. (2020), Front Plant Sci. 11:572293.
+  \item Rodriguez-Morrison V. et al. (2021), Front Plant Sci. 12:646020.
+  \item Rodriguez-Morrison V. et al. (2021), Front Plant Sci. 12:725078.
+  \item Dowling A.V. et al. (2022), Front Plant Sci. 12:797425.
+  \item Moher M. et al. (2021), HortScience 56(2):183-189.
+  \item Ahrens A. et al. (2023), Plants 12(14):2605.
+  \item Ahrens C.W. et al. (2024), Plants 13(3):433.
+  \item Holweg M.M.S.F. et al. (2024), Front Plant Sci. 15:1393803.
+  \item Powell K. et al. (2026), Front Plant Sci. 16:1753553.
+  \item Pitman T.L. et al. (2021), Plant Disease 105(4):1230.
+  \item Punja Z.K. (2025), Plants 14(5):830.
+  \item Ioannidis K. et al. (2022), Plants 11(19):2569.
+\end{enumerate}
+
+\section{Riferimenti metodologici software/matematici}
+\begin{enumerate}
+  \item Allen R.G. et al. (1998). FAO56 crop evapotranspiration.
+  \item Jones D.R. et al. (1998). Efficient Global Optimization.
+  \item Gelbart M.A. et al. (2014). Bayesian optimization with unknown constraints.
+  \item Rasmussen C.E., Williams C.K.I. (2006). Gaussian Processes for Machine Learning.
+  \item Mayne D.Q. (2014). Model Predictive Control.
+\end{enumerate}
+
+\appendix
+
+\chapter{Esempio payload sensore}
+\begin{lstlisting}[language=json]
+{
+  "timestamp": "2026-03-22T10:15:00",
+  "t_air_c": 25.8,
+  "rh_pct": 61.0,
+  "co2_ppm": 780.0,
+  "ppfd": 930.0,
+  "t_solution_c": 20.1,
+  "do_mg_l": 7.5,
+  "ec_ms_cm": 2.0,
+  "ph": 5.9,
+  "transpiration_l_m2_day": 3.2,
+  "dli_prev": 38.5
+}
+\end{lstlisting}
+
+\chapter{Esempio output control\_tick}
+\begin{lstlisting}[language=json]
+{
+  "event": "control_tick",
+  "ts": "2026-03-22T10:15:01",
+  "mode": "max_yield",
+  "cycle_day": 44,
+  "stage": "flower_early",
+  "actions": [
+    "dli_recovery",
+    "uptake_balance_high_transpiration",
+    "enforce_limits",
+    "mpc_supervisor"
+  ],
+  "sensor_quality": {
+    "score": 94.0,
+    "warnings": [],
+    "hard_faults": []
+  },
+  "governance": {
+    "run_id": "rt_20260322101501_ab12cd34",
+    "profile_signature": "sha256..."
+  }
+}
+\end{lstlisting}
+
+\chapter{Requisiti software}
+\begin{itemize}
+  \item Python 3.11+
+  \item \texttt{numpy >= 2.0.0}
+  \item \texttt{scipy >= 1.7.0}
+  \item \texttt{scikit-learn >= 1.0.0}
+  \item opzionale realtime seriale: \texttt{pyserial >= 3.5}
+\end{itemize}
+
+\begin{lstlisting}
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements_realtime_optional.txt
+\end{lstlisting}
+
+\end{document}

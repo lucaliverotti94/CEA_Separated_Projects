@@ -2,7 +2,7 @@ param(
     [ValidateSet("controller", "core")]
     [string]$Entrypoint = "controller",
 
-    [ValidateSet("max_yield", "max_quality")]
+    [ValidateSet("max_yield", "max_quality", "max_yield_energy", "max_quality_energy")]
     [string]$Mode = "max_yield",
 
     [int]$Port = 8091,
@@ -10,6 +10,8 @@ param(
     [int]$DurationSec = 90,
     [double]$TickSeconds = 0.5,
     [double]$WatchdogTimeoutS = 2.0,
+    [double]$YieldCapAnnualKg = 80.0,
+    [double]$FarmActiveAreaM2 = 1.0,
     [string]$OutJsonl = "control_output_fault_hil.jsonl",
     [string]$StoreDb = "cea_timeseries.db",
     [string]$DbPath = ""
@@ -70,6 +72,8 @@ try {
         "--http-url", $endpoint,
         "--poll-seconds", "$TickSeconds",
         "--watchdog-timeout-s", "$WatchdogTimeoutS",
+        "--yield-cap-annual-kg", "$YieldCapAnnualKg",
+        "--farm-active-area-m2", "$FarmActiveAreaM2",
         "--max-samples", "$DurationSamples",
         "--out-jsonl", $OutJsonl,
         "--store-db", $StoreDb

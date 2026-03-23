@@ -8,6 +8,17 @@ def _midpoint_params(builder: StrategyBuilder) -> dict[str, float]:
 
 
 class RegularProfileConstraintTests(unittest.TestCase):
+    def test_seed_to_cutting_hard_windows_are_exported(self) -> None:
+        builder = StrategyBuilder(
+            genetic_profile_id="regular_photoperiodic",
+            cultivar_family="indica_dominant",
+        )
+        profile = builder.build(p=_midpoint_params(builder), mode="max_yield")
+        self.assertAlmostEqual(float(profile.metadata["business_plan_seed_germination_days_min"]), 10.0, places=9)
+        self.assertAlmostEqual(float(profile.metadata["business_plan_seed_germination_days_max"]), 14.0, places=9)
+        self.assertAlmostEqual(float(profile.metadata["business_plan_seed_to_cutting_days_min"]), 27.0, places=9)
+        self.assertAlmostEqual(float(profile.metadata["business_plan_seed_to_cutting_days_max"]), 35.0, places=9)
+
     def test_indica_cycle_and_density_targets(self) -> None:
         builder = StrategyBuilder(
             genetic_profile_id="regular_photoperiodic",

@@ -9,13 +9,17 @@ class ProductionPlannerTests(unittest.TestCase):
         area = plan["area_plan_m2"]["capacity_with_margin"]
         weekly = plan["weekly_clone_plan"]["detached_cuttings_per_week"]
 
-        self.assertAlmostEqual(float(area["flower"]), 63.41, places=2)
-        self.assertAlmostEqual(float(area["propagation"]), 11.21, places=2)
-        self.assertAlmostEqual(float(area["vegetative"]), 23.79, places=2)
-        self.assertAlmostEqual(float(area["transition"]), 6.54, places=2)
+        self.assertAlmostEqual(float(area["flower"]), 84.54, places=2)
+        self.assertAlmostEqual(float(area["propagation"]), 14.95, places=2)
+        self.assertAlmostEqual(float(area["vegetative"]), 31.72, places=2)
+        self.assertAlmostEqual(float(area["transition"]), 8.72, places=2)
         self.assertEqual(int(weekly["indica_dominant"]), 8)
-        self.assertEqual(int(weekly["sativa_dominant"]), 4)
-        self.assertEqual(int(weekly["total"]), 12)
+        self.assertEqual(int(weekly["sativa_dominant"]), 6)
+        self.assertEqual(int(weekly["total"]), 14)
+        self.assertLessEqual(
+            float(plan["weekly_clone_plan"]["projected_annual_yield_kg_from_schedule"]),
+            float(plan["annual_targets"]["total_kg"]) + 1e-9,
+        )
 
     def test_scheduler_checks_are_respected(self) -> None:
         plan = build_clone_logistics_plan(PlannerInput())
@@ -24,6 +28,7 @@ class ProductionPlannerTests(unittest.TestCase):
         self.assertTrue(bool(checks["max_cuttings_per_plant_enforced"]))
         self.assertTrue(bool(checks["weekly_cuttings_within_capacity"]))
         self.assertTrue(bool(checks["saturation_below_threshold"]))
+        self.assertTrue(bool(checks["annual_yield_within_cap"]))
 
 
 if __name__ == "__main__":

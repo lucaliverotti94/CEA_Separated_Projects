@@ -27,12 +27,14 @@ from core.genetics import (
 from core.governance import dict_signature, git_commit_short, new_run_id
 from core.mpc_supervisor import enforce_setpoint_limits
 from core.model import (
+    CEADigitalTwin,
     STAGE_ORDER,
     AdaptiveController,
     SensorState,
     StageSetpoint,
     StrategyBuilder,
     StrategyProfile,
+    clone_cycle_derived_metrics,
     _dli_mol,
     profile_to_dict,
     _vpd_kpa,
@@ -54,6 +56,17 @@ REQUIRED_SENSOR_FIELDS = (
 
 SOURCE_EVENT_KEY = "_source_event"
 
+RUNTIME_MODE_BASE = {
+    "max_yield": "max_yield",
+    "max_quality": "max_quality",
+    "max_yield_energy": "max_yield",
+    "max_quality_energy": "max_quality",
+}
+ENERGY_CONSTRAINED_MODES = {"max_yield_energy", "max_quality_energy"}
+DEFAULT_ENERGY_CAP_KWH_M2 = 700.0
+DEFAULT_YIELD_CAP_ANNUAL_KG = 80.0
+DEFAULT_FARM_ACTIVE_AREA_M2 = 1.0
+
 
 def _source_event(kind: str, source: str, message: str = "") -> Dict[str, str]:
     evt = {SOURCE_EVENT_KEY: kind, "_source": source, "_event_ts": _iso_now()}
@@ -68,6 +81,63 @@ def is_source_event_payload(payload: Dict) -> bool:
 
 def source_event_kind(payload: Dict) -> str:
     return str(payload.get(SOURCE_EVENT_KEY, "")).strip().lower()
+
+
+def runtime_base_mode(mode: str) -> str:
+    if mode not in RUNTIME_MODE_BASE:
+        raise ValueError(
+            "mode must be one of: max_yield, max_quality, max_yield_energy, max_quality_energy"
+        )
+    return RUNTIME_MODE_BASE[mode]
+
+
+def is_energy_constrained_mode(mode: str) -> bool:
+    runtime_base_mode(mode)
+    return mode in ENERGY_CONSTRAINED_MODES
+
+
+def resolve_runtime_yield_cap(yield_cap_annual_kg: float, farm_active_area_m2: float) -> tuple[float, float, float]:
+    cap = float(yield_cap_annual_kg)
+    area = float(farm_active_area_m2)
+    if cap <= 0.0:
+        raise ValueError("yield_cap_annual_kg must be > 0")
+    if area <= 0.0:
+        raise ValueError("farm_active_area_m2 must be > 0")
+    return cap, area, (cap / area)
+
+
+def resolve_runtime_energy_cap(mode: str, energy_cap_kwh_m2: float) -> tuple[bool, float]:
+    constrained = is_energy_constrained_mode(mode)
+    cap = float(energy_cap_kwh_m2)
+    if cap <= 0.0:
+        raise ValueError("energy_cap_kwh_m2 must be > 0")
+    return constrained, cap
+
+
+def resolve_profile_energy_kwh_m2_cycle(projected_metrics: Dict) -> float:
+    if not isinstance(projected_metrics, dict):
+        raise ValueError("projected_metrics must be a dict")
+    raw = projected_metrics.get("energy_kwh_m2_cycle")
+    if raw is None:
+        raw = projected_metrics.get("energy_kwh_m2")
+    if raw is None:
+        raise ValueError("projected_metrics missing 'energy_kwh_m2_cycle'")
+    try:
+        return float(raw)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"projected_metrics energy field is not numeric: {raw!r}") from exc
+
+
+def projected_annual_yield_from_profile(profile: StrategyProfile, mode_base: str, farm_active_area_m2: float) -> tuple[float, Dict]:
+    twin = CEADigitalTwin(random_seed=2026, sanitation_level=0.94)
+    out = twin.simulate_cycle(profile=profile, mode=mode_base)
+    derived = clone_cycle_derived_metrics(
+        profile=profile,
+        dry_yield_g_m2=float(out.dry_yield_g_m2),
+        energy_kwh_m2=float(out.energy_kwh_m2),
+    )
+    projected = float(derived["dry_yield_kg_m2_year"]) * float(farm_active_area_m2)
+    return projected, derived
 
 
 def safe_fallback_setpoint(baseline: StageSetpoint) -> StageSetpoint:
@@ -134,11 +204,16 @@ def _extract_profile_dict(raw: Dict, mode: str) -> Dict:
 
     # Case C: optimizer full payload with results list.
     if "results" in raw and isinstance(raw["results"], list):
-        for item in raw["results"]:
-            if isinstance(item, dict) and item.get("mode") == mode:
-                p = item.get("profile")
-                if isinstance(p, dict) and all(stage in p for stage in STAGE_ORDER):
-                    return p
+        candidates = [mode]
+        mode_base = runtime_base_mode(mode)
+        if mode_base != mode:
+            candidates.append(mode_base)
+        for candidate_mode in candidates:
+            for item in raw["results"]:
+                if isinstance(item, dict) and item.get("mode") == candidate_mode:
+                    p = item.get("profile")
+                    if isinstance(p, dict) and all(stage in p for stage in STAGE_ORDER):
+                        return p
 
     raise ValueError(
         "Could not find a valid profile in JSON. Expected one of: "
@@ -199,6 +274,7 @@ def _default_profile(
     cultivar_family: str | None = None,
     cultivar_name: str = "",
 ) -> StrategyProfile:
+    mode_base = runtime_base_mode(mode)
     builder = StrategyBuilder(
         genetic_profile_id=genetic_profile,
         cultivar_family=cultivar_family,
@@ -213,7 +289,7 @@ def _default_profile(
     params["flower_photoperiod_h"] = 12.2
     # MODIFICATO: i giorni di ciclo sono hardcoded in StrategyBuilder per il profilo regular talea
     # fonte: Team Progetto CEA (2026) BUISNESS PLAN (1)
-    return builder.build(p=params, mode=mode)
+    return builder.build(p=params, mode=mode_base)
 
 
 def load_profile(
@@ -561,7 +637,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Realtime adaptive controller: uses real sensor payloads instead of digital twin simulation."
     )
-    parser.add_argument("--mode", choices=["max_yield", "max_quality"], default="max_yield")
+    parser.add_argument(
+        "--mode",
+        choices=["max_yield", "max_quality", "max_yield_energy", "max_quality_energy"],
+        default="max_yield",
+    )
 
     parser.add_argument(
         "--source",
@@ -595,6 +675,24 @@ def parse_args() -> argparse.Namespace:
         help="Optional cultivar family prior used when --profile-json is not provided.",
     )
     parser.add_argument("--cultivar-name", default="", help="Optional cultivar tag stored in profile metadata.")
+    parser.add_argument(
+        "--yield-cap-annual-kg",
+        type=float,
+        default=DEFAULT_YIELD_CAP_ANNUAL_KG,
+        help="Hard annual farm yield cap (kg/year).",
+    )
+    parser.add_argument(
+        "--energy-cap-kwh-m2",
+        type=float,
+        default=DEFAULT_ENERGY_CAP_KWH_M2,
+        help="Hard energy cap (kWh/m2 per cycle) for *_energy modes.",
+    )
+    parser.add_argument(
+        "--farm-active-area-m2",
+        type=float,
+        default=DEFAULT_FARM_ACTIVE_AREA_M2,
+        help="Active productive area (m2) used to enforce annual yield cap.",
+    )
     parser.add_argument(
         "--start-date",
         default=date.today().isoformat(),
@@ -648,6 +746,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    control_mode = runtime_base_mode(args.mode)
     if not args.profile_json:
         try:
             norm_profile, norm_family, prior = validate_profile_cultivar_args(
@@ -663,6 +762,17 @@ def main() -> None:
             args.cultivar_name = prior.name
 
     start_date = _parse_iso_date(args.start_date)
+    try:
+        yield_cap_annual_kg, farm_active_area_m2, yield_cap_kg_m2_year = resolve_runtime_yield_cap(
+            yield_cap_annual_kg=float(args.yield_cap_annual_kg),
+            farm_active_area_m2=float(args.farm_active_area_m2),
+        )
+        energy_constraint_active, energy_cap_kwh_m2 = resolve_runtime_energy_cap(
+            mode=args.mode,
+            energy_cap_kwh_m2=float(args.energy_cap_kwh_m2),
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc))
     if args.store_db:
         init_storage(args.store_db)
 
@@ -673,7 +783,28 @@ def main() -> None:
         cultivar_family=args.cultivar_family,
         cultivar_name=args.cultivar_name,
     )
-    controller = AdaptiveController(mode=args.mode)
+    projected_annual_yield_kg, projected_metrics = projected_annual_yield_from_profile(
+        profile=profile,
+        mode_base=control_mode,
+        farm_active_area_m2=farm_active_area_m2,
+    )
+    if projected_annual_yield_kg > yield_cap_annual_kg + 1e-9:
+        raise SystemExit(
+            "Profile violates hard annual yield cap: "
+            f"{projected_annual_yield_kg:.3f} kg/year > {yield_cap_annual_kg:.3f} kg/year. "
+            "Adjust --yield-cap-annual-kg / --farm-active-area-m2 or provide another profile."
+        )
+    try:
+        profile_energy_kwh_m2 = resolve_profile_energy_kwh_m2_cycle(projected_metrics)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+    if energy_constraint_active and profile_energy_kwh_m2 > energy_cap_kwh_m2 + 1e-9:
+        raise SystemExit(
+            "Profile violates hard cycle energy cap: "
+            f"{profile_energy_kwh_m2:.3f} kWh/m2 > {energy_cap_kwh_m2:.3f} kWh/m2. "
+            "Raise --energy-cap-kwh-m2 or provide a lower-energy profile."
+        )
+    controller = AdaptiveController(mode=control_mode)
     runtime_run_id = new_run_id("rt_core")
     profile_signature = dict_signature(profile_to_dict(profile))
     actuator_serial_sink: Optional[SerialActuatorSink] = None
@@ -730,6 +861,7 @@ def main() -> None:
                 "event": "controller_started",
                 "ts": _iso_now(),
                 "mode": args.mode,
+                "mode_base": control_mode,
                 "source": args.source,
                 "start_date": start_date.isoformat(),
                 "profile_source": args.profile_json or "default_profile",
@@ -740,6 +872,14 @@ def main() -> None:
                 "git_commit": git_commit_short(),
                 "profile_signature": profile_signature,
                 "stages": profile.stage_days,
+                "yield_cap_annual_kg": float(yield_cap_annual_kg),
+                "farm_active_area_m2": float(farm_active_area_m2),
+                "yield_cap_kg_m2_year": float(yield_cap_kg_m2_year),
+                "projected_annual_yield_kg": float(projected_annual_yield_kg),
+                "projected_annual_yield_kg_m2": float(projected_metrics.get("dry_yield_kg_m2_year", 0.0)),
+                "projected_cycle_energy_kwh_m2": float(profile_energy_kwh_m2),
+                "energy_constraint_active": bool(energy_constraint_active),
+                "energy_cap_kwh_m2": float(energy_cap_kwh_m2) if energy_constraint_active else None,
             },
             ensure_ascii=False,
         )

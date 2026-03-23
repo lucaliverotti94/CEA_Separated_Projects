@@ -48,6 +48,8 @@ MODE_BASE = {
     "max_quality_energy": "max_quality",
 }
 DEFAULT_ENERGY_CAP_KWH_M2 = 700.0
+DEFAULT_YIELD_CAP_ANNUAL_KG = 80.0
+DEFAULT_FARM_ACTIVE_AREA_M2 = 1.0
 
 
 def _base_mode(mode: str) -> str:
@@ -126,6 +128,7 @@ class ConstrainedYieldBO:
         mode: str,
         yield_floor_g_m2: float,
         energy_cap_kwh_m2: float = DEFAULT_ENERGY_CAP_KWH_M2,
+        yield_cap_kg_m2_year: Optional[float] = None,
         seed: int = 2026,
         twin_calibration: Optional[TwinCalibration] = None,
         genetic_profile_id: str = DEFAULT_GENETIC_PROFILE_ID,
@@ -146,8 +149,22 @@ class ConstrainedYieldBO:
             cultivar_family=cultivar_family,
             cultivar_name=cultivar_name,
         )
-        self.space = ParameterSpace(self.builder.parameter_bounds())
+        bounds = self.builder.parameter_bounds()
+        self.space = ParameterSpace(bounds)
         self.records: List[SearchRecord] = []
+        self.yield_cap_kg_m2_year: Optional[float] = None
+        self.yield_cap_g_m2_cycle: Optional[float] = None
+        self.yield_cap_active = bool(yield_cap_kg_m2_year is not None)
+        if self.yield_cap_active:
+            cap_kg_m2_year = float(yield_cap_kg_m2_year)
+            if cap_kg_m2_year <= 0.0:
+                raise ValueError("yield_cap_kg_m2_year must be > 0")
+            midpoint_params = {k: (b.lo + b.hi) / 2.0 for k, b in bounds.items()}
+            ref_profile = self.builder.build(p=midpoint_params, mode=self.base_mode)
+            cycle_days = max(float(sum(ref_profile.stage_days.values())), 1e-9)
+            cycles_per_year = 365.0 / cycle_days
+            self.yield_cap_kg_m2_year = cap_kg_m2_year
+            self.yield_cap_g_m2_cycle = (cap_kg_m2_year * 1000.0) / cycles_per_year
 
         kernel = ConstantKernel(1.0, (1e-3, 1e3)) * Matern(length_scale=1.0, nu=2.5) + WhiteKernel(
             noise_level=1e-3,
@@ -294,9 +311,15 @@ class ConstrainedYieldBO:
             p_energy = self._normal_cdf((self.energy_cap_kwh_m2 - mu_e) / std_e)
             p_feas *= p_energy
 
-        if self.base_mode == "max_quality":
+        if self.base_mode == "max_quality" or self.yield_cap_active:
             y_mu, y_std = self.gp_yield.predict(xcand, return_std=True)
             y_std = np.maximum(y_std, 1e-9)
+
+        if self.yield_cap_active and self.yield_cap_g_m2_cycle is not None:
+            p_yield_cap = self._normal_cdf((self.yield_cap_g_m2_cycle - y_mu) / y_std)
+            p_feas *= p_yield_cap
+
+        if self.base_mode == "max_quality":
             p_floor = self._normal_cdf((y_mu - self.yield_floor_g_m2) / y_std)
             p_feas *= p_floor
 
@@ -330,6 +353,7 @@ class ConstrainedYieldBO:
             and r.hlvd_pressure <= 0.08
             and (not self.energy_constraint_active or r.energy_kwh_m2 <= self.energy_cap_kwh_m2)
             and (self.base_mode != "max_quality" or r.dry_yield_g_m2 >= self.yield_floor_g_m2)
+            and (not self.yield_cap_active or (self.yield_cap_g_m2_cycle is not None and r.dry_yield_g_m2 <= self.yield_cap_g_m2_cycle))
         ]
         if feasible:
             # In max_quality, a parita` di quality usa la resa come tie-break.
@@ -337,13 +361,31 @@ class ConstrainedYieldBO:
                 return max(feasible, key=lambda r: (r.objective, r.dry_yield_g_m2))
             return max(feasible, key=lambda r: r.objective)
         if self.base_mode == "max_quality":
-            details = [f"hard yield floor >= {self.yield_floor_g_m2:.1f} g/m2"]
+            details: List[str] = []
+            details.append(f"hard yield floor >= {self.yield_floor_g_m2:.1f} g/m2")
             if self.energy_constraint_active:
                 details.append(f"energy <= {self.energy_cap_kwh_m2:.1f} kWh/m2")
+            if self.yield_cap_active and self.yield_cap_kg_m2_year is not None:
+                details.append(f"yield <= {self.yield_cap_kg_m2_year:.3f} kg/m2/year")
             detail_txt = " and ".join(details)
             raise RuntimeError(
                 f"No feasible candidate found for {self.mode} with {detail_txt}."
             )
+        if self.energy_constraint_active or self.yield_cap_active:
+            hard_candidates = [
+                r
+                for r in self.records
+                if (not self.energy_constraint_active or r.energy_kwh_m2 <= self.energy_cap_kwh_m2)
+                and (not self.yield_cap_active or (self.yield_cap_g_m2_cycle is not None and r.dry_yield_g_m2 <= self.yield_cap_g_m2_cycle))
+            ]
+            if hard_candidates:
+                return max(hard_candidates, key=lambda r: r.objective - 20.0 * r.feasibility_violation)
+            details = []
+            if self.energy_constraint_active:
+                details.append(f"energy <= {self.energy_cap_kwh_m2:.1f} kWh/m2")
+            if self.yield_cap_active and self.yield_cap_kg_m2_year is not None:
+                details.append(f"yield <= {self.yield_cap_kg_m2_year:.3f} kg/m2/year")
+            raise RuntimeError(f"No candidate found for {self.mode} with {' and '.join(details)}.")
         return max(self.records, key=lambda r: r.objective - 20.0 * r.feasibility_violation)
 
 
@@ -353,6 +395,7 @@ def _robust_yield_score(
     eval_seed: int,
     twin_calibration: Optional[TwinCalibration],
     energy_cap_kwh_m2: Optional[float] = None,
+    yield_cap_kg_m2_year: Optional[float] = None,
 ) -> Dict[str, float]:
     yields: List[float] = []
     penalties: List[float] = []
@@ -360,6 +403,10 @@ def _robust_yield_score(
     hlvds: List[float] = []
     energies: List[float] = []
     feasible_count = 0
+    yield_cap_g_m2_cycle: Optional[float] = None
+    if yield_cap_kg_m2_year is not None:
+        cycle_days = max(float(sum(profile.stage_days.values())), 1e-9)
+        yield_cap_g_m2_cycle = (float(yield_cap_kg_m2_year) * 1000.0) / (365.0 / cycle_days)
 
     for k in range(eval_runs):
         twin = CEADigitalTwin(
@@ -379,7 +426,8 @@ def _robust_yield_score(
         hlvds.append(h)
         energies.append(e)
         energy_ok = energy_cap_kwh_m2 is None or e <= float(energy_cap_kwh_m2)
-        feasible_count += int((p <= 15.0) and (d <= 3.0) and (h <= 0.08) and energy_ok)
+        yield_ok = yield_cap_g_m2_cycle is None or y <= float(yield_cap_g_m2_cycle)
+        feasible_count += int((p <= 15.0) and (d <= 3.0) and (h <= 0.08) and energy_ok and yield_ok)
 
     mean_y = float(np.mean(yields))
     p10_y = float(np.percentile(np.asarray(yields, dtype=float), 10))
@@ -392,6 +440,9 @@ def _robust_yield_score(
     excess_energy = 0.0
     if energy_cap_kwh_m2 is not None:
         excess_energy = max(0.0, mean_e - float(energy_cap_kwh_m2))
+    excess_yield_cap = 0.0
+    if yield_cap_g_m2_cycle is not None:
+        excess_yield_cap = max(0.0, mean_y - float(yield_cap_g_m2_cycle))
 
     score = (
         1.00 * mean_y
@@ -402,6 +453,7 @@ def _robust_yield_score(
         - 70.0 * mean_d
         - 1800.0 * mean_h
         - 7.5 * excess_energy
+        - 8.0 * excess_yield_cap
     )
     return {
         "robust_yield_score": float(score),
@@ -413,6 +465,7 @@ def _robust_yield_score(
         "robust_mean_disease_pressure": mean_d,
         "robust_mean_hlvd_pressure": mean_h,
         "robust_mean_energy_kwh_m2": mean_e,
+        "robust_mean_yield_excess_vs_cap_g_m2": float(excess_yield_cap),
     }
 
 
@@ -434,6 +487,7 @@ def _ensemble_uncertainty(
     eval_seed: int,
     twin_calibration: Optional[TwinCalibration],
     energy_cap_kwh_m2: Optional[float] = None,
+    yield_cap_kg_m2_year: Optional[float] = None,
 ) -> Dict[str, Dict[str, float] | float]:
     yields: List[float] = []
     quality: List[float] = []
@@ -442,6 +496,10 @@ def _ensemble_uncertainty(
     hlvd: List[float] = []
     energy: List[float] = []
     feasible_count = 0
+    yield_cap_g_m2_cycle: Optional[float] = None
+    if yield_cap_kg_m2_year is not None:
+        cycle_days = max(float(sum(profile.stage_days.values())), 1e-9)
+        yield_cap_g_m2_cycle = (float(yield_cap_kg_m2_year) * 1000.0) / (365.0 / cycle_days)
 
     for k in range(eval_runs):
         twin = CEADigitalTwin(
@@ -457,7 +515,8 @@ def _ensemble_uncertainty(
         hlvd.append(float(out.hlvd_pressure))
         energy.append(float(out.energy_kwh_m2))
         energy_ok = energy_cap_kwh_m2 is None or float(out.energy_kwh_m2) <= float(energy_cap_kwh_m2)
-        feasible_count += int((out.penalty <= 15.0) and (out.disease_pressure <= 3.0) and (out.hlvd_pressure <= 0.08) and energy_ok)
+        yield_ok = yield_cap_g_m2_cycle is None or float(out.dry_yield_g_m2) <= float(yield_cap_g_m2_cycle)
+        feasible_count += int((out.penalty <= 15.0) and (out.disease_pressure <= 3.0) and (out.hlvd_pressure <= 0.08) and energy_ok and yield_ok)
 
     return {
         "n_eval": int(eval_runs),
@@ -484,11 +543,22 @@ def _resolve_twin_calibration(args: argparse.Namespace) -> TwinCalibration:
     return calibration
 
 
+def _resolve_yield_cap(args: argparse.Namespace) -> tuple[float, float, float]:
+    yield_cap_annual_kg = float(getattr(args, "yield_cap_annual_kg", DEFAULT_YIELD_CAP_ANNUAL_KG))
+    farm_active_area_m2 = float(getattr(args, "farm_active_area_m2", DEFAULT_FARM_ACTIVE_AREA_M2))
+    if yield_cap_annual_kg <= 0.0:
+        raise ValueError("yield_cap_annual_kg must be > 0")
+    if farm_active_area_m2 <= 0.0:
+        raise ValueError("farm_active_area_m2 must be > 0")
+    return yield_cap_annual_kg, farm_active_area_m2, (yield_cap_annual_kg / farm_active_area_m2)
+
+
 def run_mode(mode: str, args: argparse.Namespace) -> Dict:
     mode_base = _base_mode(mode)
     energy_cap_kwh_m2 = float(getattr(args, "energy_cap_kwh_m2", DEFAULT_ENERGY_CAP_KWH_M2))
     if energy_cap_kwh_m2 <= 0.0:
         raise ValueError("energy_cap_kwh_m2 must be > 0")
+    yield_cap_annual_kg, farm_active_area_m2, yield_cap_kg_m2_year = _resolve_yield_cap(args)
 
     # Stesso seed base fra modalita` per confronto piu` fair.
     base_seed = int(getattr(args, "seed", 2026))
@@ -514,6 +584,7 @@ def run_mode(mode: str, args: argparse.Namespace) -> Dict:
                 mode=mode,
                 yield_floor_g_m2=quality_y_min,
                 energy_cap_kwh_m2=energy_cap_kwh_m2,
+                yield_cap_kg_m2_year=yield_cap_kg_m2_year,
                 seed=restart_seed,
                 twin_calibration=twin_calibration,
                 genetic_profile_id=genetic_profile,
@@ -527,6 +598,7 @@ def run_mode(mode: str, args: argparse.Namespace) -> Dict:
                 eval_seed=base_seed + 50000 + 100 * r,
                 twin_calibration=twin_calibration,
                 energy_cap_kwh_m2=(energy_cap_kwh_m2 if _is_energy_constrained_mode(mode) else None),
+                yield_cap_kg_m2_year=yield_cap_kg_m2_year,
             )
             candidates.append((cand, robust, restart_seed))
 
@@ -547,6 +619,7 @@ def run_mode(mode: str, args: argparse.Namespace) -> Dict:
                 mode=mode,
                 yield_floor_g_m2=quality_y_min,
                 energy_cap_kwh_m2=energy_cap_kwh_m2,
+                yield_cap_kg_m2_year=yield_cap_kg_m2_year,
                 seed=restart_seed,
                 twin_calibration=twin_calibration,
                 genetic_profile_id=genetic_profile,
@@ -564,11 +637,14 @@ def run_mode(mode: str, args: argparse.Namespace) -> Dict:
             quality_constraints = [f"hard yield floor >= {quality_y_min:.1f} g/m2"]
             if _is_energy_constrained_mode(mode):
                 quality_constraints.append(f"energy <= {energy_cap_kwh_m2:.1f} kWh/m2")
+            quality_constraints.append(f"yield <= {yield_cap_kg_m2_year:.3f} kg/m2/year")
             tips = ["increasing --n-init/--n-iter/--pool-size"]
             if mode_base == "max_quality":
                 tips.append("lowering --quality-y-min")
             if _is_energy_constrained_mode(mode):
                 tips.append("raising --energy-cap-kwh-m2")
+            tips.append("raising --yield-cap-annual-kg")
+            tips.append("reducing --farm-active-area-m2")
             raise RuntimeError(
                 f"{mode} failed after {quality_restarts} restarts with {' and '.join(quality_constraints)}. "
                 f"Try {', '.join(tips)}."
@@ -583,6 +659,9 @@ def run_mode(mode: str, args: argparse.Namespace) -> Dict:
     extra["energy_constraint_active"] = bool(_is_energy_constrained_mode(mode))
     if _is_energy_constrained_mode(mode):
         extra["energy_cap_kwh_m2"] = float(energy_cap_kwh_m2)
+    extra["yield_cap_annual_kg"] = float(yield_cap_annual_kg)
+    extra["farm_active_area_m2"] = float(farm_active_area_m2)
+    extra["yield_cap_kg_m2_year"] = float(yield_cap_kg_m2_year)
 
     uncertainty = (
         _ensemble_uncertainty(
@@ -592,6 +671,7 @@ def run_mode(mode: str, args: argparse.Namespace) -> Dict:
             eval_seed=base_seed + 90000 + (0 if mode_base == "max_yield" else 3000),
             twin_calibration=twin_calibration,
             energy_cap_kwh_m2=(energy_cap_kwh_m2 if _is_energy_constrained_mode(mode) else None),
+            yield_cap_kg_m2_year=yield_cap_kg_m2_year,
         )
         if ensemble_evals > 0
         else {}
@@ -604,6 +684,16 @@ def run_mode(mode: str, args: argparse.Namespace) -> Dict:
         dry_yield_g_m2=best.dry_yield_g_m2,
         energy_kwh_m2=best.energy_kwh_m2,
     )
+    projected_annual_yield_kg = float(derived["dry_yield_kg_m2_year"]) * float(farm_active_area_m2)
+    if projected_annual_yield_kg > float(yield_cap_annual_kg) + 1e-9:
+        raise RuntimeError(
+            "Generated profile violates hard annual yield cap: "
+            f"{projected_annual_yield_kg:.3f} kg/year > {yield_cap_annual_kg:.3f} kg/year."
+        )
+    derived["farm_active_area_m2"] = float(farm_active_area_m2)
+    derived["projected_annual_yield_kg"] = float(projected_annual_yield_kg)
+    derived["yield_cap_annual_kg"] = float(yield_cap_annual_kg)
+    derived["yield_cap_respected"] = bool(projected_annual_yield_kg <= float(yield_cap_annual_kg) + 1e-9)
     outcome_dict = dict(best.outcome_dict)
     outcome_dict["derived_metrics"] = derived
     governance = {
@@ -641,6 +731,9 @@ def run_mode(mode: str, args: argparse.Namespace) -> Dict:
         "constraints": {
             "yield_floor_g_m2": float(quality_y_min) if mode_base == "max_quality" else None,
             "energy_cap_kwh_m2": float(energy_cap_kwh_m2) if _is_energy_constrained_mode(mode) else None,
+            "yield_cap_annual_kg": float(yield_cap_annual_kg),
+            "farm_active_area_m2": float(farm_active_area_m2),
+            "yield_cap_kg_m2_year": float(yield_cap_kg_m2_year),
         },
         "governance": governance,
     }
@@ -677,6 +770,18 @@ def main() -> None:
         type=float,
         default=DEFAULT_ENERGY_CAP_KWH_M2,
         help="Hard energy cap (kWh/m2 per cycle) used by *_energy modes.",
+    )
+    parser.add_argument(
+        "--yield-cap-annual-kg",
+        type=float,
+        default=DEFAULT_YIELD_CAP_ANNUAL_KG,
+        help="Hard annual yield cap (kg/year) at farm level.",
+    )
+    parser.add_argument(
+        "--farm-active-area-m2",
+        type=float,
+        default=DEFAULT_FARM_ACTIVE_AREA_M2,
+        help="Active productive farm area (m2) used to convert annual cap into kg/m2/year.",
     )
     parser.add_argument("--n-init", type=int, default=24)
     parser.add_argument("--n-iter", type=int, default=30)
@@ -752,6 +857,10 @@ def main() -> None:
         print(f"Objective value:        {r['objective_value']:.2f}")
         print(f"Feasibility violation:  {r['feasibility_violation']:.3f}")
         print(f"Dry yield (g/m2):       {o['dry_yield_g_m2']:.2f}")
+        dm = o.get("derived_metrics", {})
+        if dm:
+            print(f"Projected annual yield: {dm.get('projected_annual_yield_kg', 0.0):.2f} kg/year")
+            print(f"Yield cap annual:       {dm.get('yield_cap_annual_kg', 0.0):.2f} kg/year")
         print(f"Quality index:          {o['quality_index']:.2f}")
         print(f"Energy (kWh/m2):        {o['energy_kwh_m2']:.2f}")
         print(f"Penalty:                {o['penalty']:.2f}")

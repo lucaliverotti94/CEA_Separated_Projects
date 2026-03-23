@@ -36,6 +36,8 @@ def _render_markdown(plan: dict) -> str:
         f"- Talee staccate sativa: {weekly['detached_cuttings_per_week']['sativa_dominant']}",
         f"- Totale talee staccate: {weekly['detached_cuttings_per_week']['total']}",
         f"- Totale attese radicate: {weekly['expected_rooted_per_week']['total']:.2f}",
+        f"- Produzione annua stimata dal piano: {weekly['projected_annual_yield_kg_from_schedule']:.2f} kg/anno",
+        f"- Rebalance cap resa applicato: {weekly['yield_cap_rebalance_applied']}",
         "",
         "## Saturazione",
         f"- Soglia blocco: {100.0 * area['saturation_threshold']:.1f}%",
@@ -49,7 +51,7 @@ def _render_markdown(plan: dict) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Clone-cycle logistics planner for regular photoperiodic CEA.")
-    parser.add_argument("--target-annual-kg", type=float, default=60.0)
+    parser.add_argument("--target-annual-kg", type=float, default=80.0)
     parser.add_argument("--target-yield-kg-m2-cycle", type=float, default=0.35)
     parser.add_argument("--mix-indica", type=float, default=0.50)
     parser.add_argument("--mix-sativa", type=float, default=0.50)
@@ -93,4 +95,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

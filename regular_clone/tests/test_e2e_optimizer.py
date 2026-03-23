@@ -26,6 +26,14 @@ class OptimizerE2ETests(unittest.TestCase):
         )
         self.assertAlmostEqual(float(derived["energy_kwh_m2_year"]), energy_kwh_m2 * (365.0 / cycle_days), places=6)
         self.assertEqual(derived["units_version"], "v1")
+        self.assertIn("projected_annual_yield_kg", derived)
+        self.assertIn("yield_cap_annual_kg", derived)
+        self.assertIn("farm_active_area_m2", derived)
+        self.assertTrue(bool(derived["yield_cap_respected"]))
+        self.assertLessEqual(
+            float(derived["projected_annual_yield_kg"]),
+            float(derived["yield_cap_annual_kg"]) + 1e-9,
+        )
 
     def test_run_mode_max_yield_minimal_budget(self) -> None:
         args = SimpleNamespace(
@@ -43,6 +51,8 @@ class OptimizerE2ETests(unittest.TestCase):
             cultivar_family="hybrid",
             cultivar_name="",
             energy_cap_kwh_m2=700.0,
+            yield_cap_annual_kg=80.0,
+            farm_active_area_m2=1.0,
         )
         res = run_mode(mode="max_yield", args=args)
         self.assertEqual(res["mode"], "max_yield")
@@ -68,6 +78,8 @@ class OptimizerE2ETests(unittest.TestCase):
             cultivar_family="hybrid",
             cultivar_name="",
             energy_cap_kwh_m2=700.0,
+            yield_cap_annual_kg=80.0,
+            farm_active_area_m2=1.0,
         )
         res = run_mode(mode="max_quality", args=args)
         self.assertEqual(res["mode"], "max_quality")
@@ -92,6 +104,8 @@ class OptimizerE2ETests(unittest.TestCase):
             cultivar_family="hybrid",
             cultivar_name="",
             energy_cap_kwh_m2=energy_cap,
+            yield_cap_annual_kg=80.0,
+            farm_active_area_m2=1.0,
         )
         res = run_mode(mode="max_yield_energy", args=args)
         self.assertEqual(res["mode"], "max_yield_energy")
@@ -115,12 +129,36 @@ class OptimizerE2ETests(unittest.TestCase):
             cultivar_family="hybrid",
             cultivar_name="",
             energy_cap_kwh_m2=energy_cap,
+            yield_cap_annual_kg=80.0,
+            farm_active_area_m2=1.0,
         )
         res = run_mode(mode="max_quality_energy", args=args)
         self.assertEqual(res["mode"], "max_quality_energy")
         self.assertGreaterEqual(float(res["outcome"]["dry_yield_g_m2"]), 500.0)
         self.assertLessEqual(float(res["outcome"]["energy_kwh_m2"]), energy_cap)
         self._assert_extended_clone_metrics(res)
+
+    def test_run_mode_raises_when_annual_yield_cap_is_too_low(self) -> None:
+        args = SimpleNamespace(
+            seed=2026,
+            quality_y_min=500.0,
+            n_init=4,
+            n_iter=2,
+            pool_size=120,
+            yield_restarts=1,
+            yield_robust_evals=2,
+            quality_restarts=1,
+            ensemble_evals=0,
+            twin_calibration_json=None,
+            genetic_profile="regular_photoperiodic",
+            cultivar_family="hybrid",
+            cultivar_name="",
+            energy_cap_kwh_m2=1200.0,
+            yield_cap_annual_kg=0.01,
+            farm_active_area_m2=1.0,
+        )
+        with self.assertRaises(RuntimeError):
+            run_mode(mode="max_yield", args=args)
 
 
 if __name__ == "__main__":

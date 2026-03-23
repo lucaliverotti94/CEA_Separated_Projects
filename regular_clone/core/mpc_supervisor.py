@@ -59,6 +59,13 @@ _DELTA_OPTIONS: Dict[str, Tuple[float, ...]] = {
     "ph": (-0.1, -0.05, 0.0, 0.05, 0.1),
 }
 
+_MODE_BASE = {
+    "max_yield": "max_yield",
+    "max_quality": "max_quality",
+    "max_yield_energy": "max_yield",
+    "max_quality_energy": "max_quality",
+}
+
 
 def enforce_setpoint_limits(candidate: StageSetpoint, sensor: SensorState) -> StageSetpoint:
     c = replace(candidate)
@@ -91,9 +98,12 @@ class MPCConfig:
 
 class MPCSupervisor:
     def __init__(self, mode: str, config: MPCConfig | None = None):
-        if mode not in {"max_yield", "max_quality"}:
-            raise ValueError("mode must be 'max_yield' or 'max_quality'")
-        self.mode = mode
+        if mode not in _MODE_BASE:
+            raise ValueError(
+                "mode must be one of: max_yield, max_quality, max_yield_energy, max_quality_energy"
+            )
+        self.mode = _MODE_BASE[mode]
+        self.mode_requested = mode
         self.config = config or MPCConfig()
         self.rng = np.random.default_rng(self.config.random_seed)
 

@@ -4,3 +4,8 @@
 **/.mypy_cache/
 legacy/runtime/
 regular_clone/runtime/
+**/*.aux
+**/*.log
+**/*.out
+**/*.toc
+regular_clone/DOCUMENTAZIONE_TECNICA_REGULAR_CLONE_IT.pdf

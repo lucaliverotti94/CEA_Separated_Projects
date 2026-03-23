@@ -23,6 +23,9 @@ from core.mpc_supervisor import MPCConfig, MPCSupervisor, enforce_setpoint_limit
 from core.sensor_quality import evaluate_sensor_quality
 from core.storage import init_storage, store_alert_event, store_control_tick, store_optimizer_run
 from core.realtime_io import (
+    DEFAULT_ENERGY_CAP_KWH_M2,
+    DEFAULT_FARM_ACTIVE_AREA_M2,
+    DEFAULT_YIELD_CAP_ANNUAL_KG,
     SerialActuatorSink,
     _iso_now,
     _parse_iso_date,
@@ -33,16 +36,38 @@ from core.realtime_io import (
     emit_output,
     is_source_event_payload,
     load_profile,
+    projected_annual_yield_from_profile,
+    resolve_profile_energy_kwh_m2_cycle,
+    resolve_runtime_energy_cap,
+    resolve_runtime_yield_cap,
     resolve_stage_for_day,
     sensor_payload_to_state,
     source_event_kind,
 )
 from optimizer_literature_best import run_mode
 
+RUNTIME_MODE_BASE = {
+    "max_yield": "max_yield",
+    "max_quality": "max_quality",
+    "max_yield_energy": "max_yield",
+    "max_quality_energy": "max_quality",
+}
+
+
+def _runtime_base_mode(mode: str) -> str:
+    if mode not in RUNTIME_MODE_BASE:
+        raise ValueError(
+            "mode must be one of: max_yield, max_quality, max_yield_energy, max_quality_energy"
+        )
+    return RUNTIME_MODE_BASE[mode]
+
 
 def _build_profile_from_literature(mode: str, args: argparse.Namespace) -> Dict:
     opt_args = SimpleNamespace(
         quality_y_min=args.quality_y_min,
+        energy_cap_kwh_m2=args.energy_cap_kwh_m2,
+        yield_cap_annual_kg=args.yield_cap_annual_kg,
+        farm_active_area_m2=args.farm_active_area_m2,
         n_init=args.opt_n_init,
         n_iter=args.opt_n_iter,
         pool_size=args.opt_pool_size,
@@ -77,7 +102,11 @@ def parse_args() -> argparse.Namespace:
         )
     )
 
-    parser.add_argument("--mode", choices=["max_yield", "max_quality"], default="max_yield")
+    parser.add_argument(
+        "--mode",
+        choices=["max_yield", "max_quality", "max_yield_energy", "max_quality_energy"],
+        default="max_yield",
+    )
 
     parser.add_argument(
         "--source",
@@ -118,6 +147,24 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument("--quality-y-min", type=float, default=1300.0, help="Yield floor for max_quality optimization.")
+    parser.add_argument(
+        "--energy-cap-kwh-m2",
+        type=float,
+        default=DEFAULT_ENERGY_CAP_KWH_M2,
+        help="Hard energy cap (kWh/m2 per cycle) for *_energy modes.",
+    )
+    parser.add_argument(
+        "--yield-cap-annual-kg",
+        type=float,
+        default=DEFAULT_YIELD_CAP_ANNUAL_KG,
+        help="Hard annual farm yield cap (kg/year).",
+    )
+    parser.add_argument(
+        "--farm-active-area-m2",
+        type=float,
+        default=DEFAULT_FARM_ACTIVE_AREA_M2,
+        help="Active productive area (m2) used to enforce annual yield cap.",
+    )
     parser.add_argument("--opt-n-init", type=int, default=20)
     parser.add_argument("--opt-n-iter", type=int, default=24)
     parser.add_argument("--opt-pool-size", type=int, default=1800)
@@ -191,6 +238,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    control_mode = _runtime_base_mode(args.mode)
     if not args.profile_json:
         try:
             norm_profile, norm_family, prior = validate_profile_cultivar_args(
@@ -206,6 +254,17 @@ def main() -> None:
             args.cultivar_name = prior.name
 
     start_date = _parse_iso_date(args.start_date)
+    try:
+        yield_cap_annual_kg, farm_active_area_m2, yield_cap_kg_m2_year = resolve_runtime_yield_cap(
+            yield_cap_annual_kg=float(args.yield_cap_annual_kg),
+            farm_active_area_m2=float(args.farm_active_area_m2),
+        )
+        energy_constraint_active, energy_cap_kwh_m2 = resolve_runtime_energy_cap(
+            mode=args.mode,
+            energy_cap_kwh_m2=float(args.energy_cap_kwh_m2),
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc))
 
     profile_source: str
     generation_meta: Optional[Dict] = None
@@ -229,13 +288,41 @@ def main() -> None:
         if args.store_db:
             store_optimizer_run(db_path=args.store_db, result=generation_meta, ts=_iso_now())
 
-    controller = AdaptiveController(mode=args.mode)
+    controller = AdaptiveController(mode=control_mode)
     runtime_run_id = new_run_id("rt")
     profile_signature = dict_signature(profile_to_dict(profile))
+    projected_annual_yield_kg, projected_metrics = projected_annual_yield_from_profile(
+        profile=profile,
+        mode_base=control_mode,
+        farm_active_area_m2=farm_active_area_m2,
+    )
+    if isinstance(generation_meta, dict):
+        derived_meta = (((generation_meta.get("outcome") or {}).get("derived_metrics")) or {})
+        try:
+            projected_annual_yield_kg = float(derived_meta.get("dry_yield_kg_m2_year")) * float(farm_active_area_m2)
+            projected_metrics = dict(derived_meta)
+        except Exception:
+            pass
+    if projected_annual_yield_kg > yield_cap_annual_kg + 1e-9:
+        raise SystemExit(
+            "Profile violates hard annual yield cap: "
+            f"{projected_annual_yield_kg:.3f} kg/year > {yield_cap_annual_kg:.3f} kg/year. "
+            "Adjust --yield-cap-annual-kg / --farm-active-area-m2 or regenerate profile."
+        )
+    try:
+        profile_energy_kwh_m2 = resolve_profile_energy_kwh_m2_cycle(projected_metrics)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+    if energy_constraint_active and profile_energy_kwh_m2 > energy_cap_kwh_m2 + 1e-9:
+        raise SystemExit(
+            "Profile violates hard cycle energy cap: "
+            f"{profile_energy_kwh_m2:.3f} kWh/m2 > {energy_cap_kwh_m2:.3f} kWh/m2. "
+            "Raise --energy-cap-kwh-m2 or regenerate/provide a lower-energy profile."
+        )
     mpc_supervisor: Optional[MPCSupervisor] = None
     if args.use_mpc_supervisor:
         mpc_supervisor = MPCSupervisor(
-            mode=args.mode,
+            mode=control_mode,
             config=MPCConfig(
                 horizon_steps=max(1, int(args.mpc_horizon)),
                 candidate_samples=max(1, int(args.mpc_candidates)),
@@ -294,6 +381,7 @@ def main() -> None:
         "event": "controller_started",
         "ts": _iso_now(),
         "mode": args.mode,
+        "mode_base": control_mode,
         "source": args.source,
         "start_date": start_date.isoformat(),
         "profile_source": profile_source,
@@ -304,6 +392,14 @@ def main() -> None:
         "git_commit": git_commit_short(),
         "profile_signature": profile_signature,
         "stages": profile.stage_days,
+        "yield_cap_annual_kg": float(yield_cap_annual_kg),
+        "farm_active_area_m2": float(farm_active_area_m2),
+        "yield_cap_kg_m2_year": float(yield_cap_kg_m2_year),
+        "projected_annual_yield_kg": float(projected_annual_yield_kg),
+        "projected_annual_yield_kg_m2": float(projected_metrics.get("dry_yield_kg_m2_year", 0.0)),
+        "projected_cycle_energy_kwh_m2": float(profile_energy_kwh_m2),
+        "energy_constraint_active": bool(energy_constraint_active),
+        "energy_cap_kwh_m2": float(energy_cap_kwh_m2) if energy_constraint_active else None,
     }
     if generation_meta is not None:
         start_event["generation_meta"] = {

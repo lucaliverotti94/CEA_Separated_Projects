@@ -36,7 +36,7 @@ HARD_DENSITY_PL_M2 = {
 
 @dataclass(frozen=True)
 class PlannerInput:
-    target_annual_kg: float = 60.0
+    target_annual_kg: float = 80.0
     target_yield_kg_m2_cycle: float = 0.35
     mix_indica: float = 0.50
     mix_sativa: float = 0.50
@@ -98,6 +98,56 @@ def _weekly_cuttings_capacity(
     indica_rate = indicap * cuttings_per_plant / HARD_STAGE_DAYS["indica_dominant"]["vegetative"] * 7.0
     sativa_rate = sativap * cuttings_per_plant / HARD_STAGE_DAYS["sativa_dominant"]["vegetative"] * 7.0
     return float(indica_rate + sativa_rate)
+
+
+def _projected_annual_yield_from_schedule(
+    detached_week: Dict[str, int],
+    rooting_rate: float,
+    yield_per_plant_kg: Dict[str, float],
+) -> float:
+    total = 0.0
+    for family in FAMILIES:
+        rooted_week = float(detached_week[family]) * float(rooting_rate)
+        total += rooted_week * 52.0 * float(yield_per_plant_kg[family])
+    return float(total)
+
+
+def _rebalance_weekly_detached_for_yield_cap(
+    detached_week: Dict[str, int],
+    target_annual_kg: float,
+    rooting_rate: float,
+    yield_per_plant_kg: Dict[str, float],
+) -> tuple[Dict[str, int], float, bool]:
+    current = {
+        "indica_dominant": int(detached_week["indica_dominant"]),
+        "sativa_dominant": int(detached_week["sativa_dominant"]),
+    }
+    projected = _projected_annual_yield_from_schedule(current, rooting_rate, yield_per_plant_kg)
+    if projected <= target_annual_kg + 1e-9:
+        return current, projected, False
+
+    best_under: Dict[str, int] | None = None
+    best_under_proj = -1.0
+    best_any: Dict[str, int] = dict(current)
+    best_any_proj = projected
+
+    for detached_i in range(1, current["indica_dominant"] + 1):
+        for detached_s in range(1, current["sativa_dominant"] + 1):
+            cand = {
+                "indica_dominant": int(detached_i),
+                "sativa_dominant": int(detached_s),
+            }
+            cand_proj = _projected_annual_yield_from_schedule(cand, rooting_rate, yield_per_plant_kg)
+            if cand_proj < best_any_proj:
+                best_any_proj = cand_proj
+                best_any = cand
+            if cand_proj <= target_annual_kg + 1e-9 and cand_proj > best_under_proj:
+                best_under_proj = cand_proj
+                best_under = cand
+
+    if best_under is not None:
+        return best_under, best_under_proj, True
+    return best_any, best_any_proj, True
 
 
 def build_clone_logistics_plan(cfg: PlannerInput) -> Dict[str, object]:
@@ -167,12 +217,18 @@ def build_clone_logistics_plan(cfg: PlannerInput) -> Dict[str, object]:
         for f in FAMILIES:
             detached_week[f] = max(1, int(ceil(detached_week[f] * scale)))
         rebalance_applied = True
+    detached_week, projected_annual_yield_kg, yield_cap_rebalance_applied = _rebalance_weekly_detached_for_yield_cap(
+        detached_week=detached_week,
+        target_annual_kg=cfg.target_annual_kg,
+        rooting_rate=cfg.rooting_rate,
+        yield_per_plant_kg=yield_per_plant_kg,
+    )
 
     rooted_week = {
         f: float(detached_week[f] * cfg.rooting_rate) for f in FAMILIES
     }
     harvest_kg_week = {
-        f: float((annual_plants_needed[f] / 52.0) * yield_per_plant_kg[f]) for f in FAMILIES
+        f: float(rooted_week[f] * yield_per_plant_kg[f]) for f in FAMILIES
     }
 
     windows = []
@@ -210,6 +266,7 @@ def build_clone_logistics_plan(cfg: PlannerInput) -> Dict[str, object]:
             (detached_week["indica_dominant"] + detached_week["sativa_dominant"]) <= weekly_cuttings_cap
         ),
         "saturation_below_threshold": bool(max_sat < cfg.saturation_threshold),
+        "annual_yield_within_cap": bool(projected_annual_yield_kg <= (cfg.target_annual_kg + 1e-9)),
     }
 
     return {
@@ -258,9 +315,11 @@ def build_clone_logistics_plan(cfg: PlannerInput) -> Dict[str, object]:
                 "sativa_dominant": harvest_kg_week["sativa_dominant"],
                 "total": harvest_kg_week["indica_dominant"] + harvest_kg_week["sativa_dominant"],
             },
+            "projected_annual_yield_kg_from_schedule": projected_annual_yield_kg,
             "windows": windows,
             "weekly_cuttings_capacity_limit": weekly_cuttings_cap,
             "rebalance_applied": rebalance_applied,
+            "yield_cap_rebalance_applied": yield_cap_rebalance_applied,
         },
         "scheduler_rules": [
             "max 5 cuttings per vegetative plant",
