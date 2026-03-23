@@ -2,7 +2,7 @@
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Analisi economica"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "economics"))
 import cea_economic_analysis as econ
 
 
@@ -43,6 +43,33 @@ class EconomicHybridModelTests(unittest.TestCase):
         c = econ.case(80.0, 4.0, "hybrid", "base")
         self.assertAlmostEqual(c["c_auto"], c["c_auto_sensors"] + c["c_control_core"] + c["c_actuation_interfaces"], places=6)
         self.assertAlmostEqual(c["c_auto_sensors"], 6205.0, places=6)
+
+    def test_case_exposes_investor_kpis(self) -> None:
+        c = econ.case(80.0, 4.0, "hybrid", "base")
+        self.assertIn("annual_revenue_eur", c)
+        self.assertIn("ebitda_annual_eur", c)
+        self.assertIn("roi_annual_pct", c)
+        self.assertIn("simple_payback_years", c)
+        self.assertIn("break_even_yield_kg_year", c)
+        self.assertGreater(float(c["annual_revenue_eur"]), 0.0)
+        self.assertGreater(float(c["break_even_yield_kg_year"]), 0.0)
+
+    def test_project_case_is_aligned_with_target_and_returns_core_kpis(self) -> None:
+        c = econ.project_case(
+            target_annual_kg=80.0,
+            price_eur_g=4.0,
+            mix_indica=0.5,
+            mix_sativa=0.5,
+            target_yield_kg_m2_cycle=0.35,
+            energy_cap_kwh_m2_cycle=700.0,
+        )
+        self.assertAlmostEqual(float(c["target_annual_kg"]), 80.0, places=9)
+        self.assertTrue(bool(c["plan_checks"]["annual_yield_within_cap"]))
+        self.assertIn("annual_revenue_eur", c)
+        self.assertIn("ebitda_annual_eur", c)
+        self.assertIn("roi_annual_pct", c)
+        self.assertIn("simple_payback_years", c)
+        self.assertGreater(float(c["annual_revenue_eur"]), 0.0)
 
 
 if __name__ == "__main__":

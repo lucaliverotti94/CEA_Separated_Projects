@@ -62,12 +62,7 @@
         "dli_demand_scale": 1.07,
         "flower_duration_scale": 1.08
       },
-      "bound_overrides": {
-        "flower_total_days": [
-          58.0,
-          86.0
-        ]
-      },
+      "bound_overrides": {},
       "evidence_source_ids": [
         "ahrens_2024_13h_photoperiod"
       ]
@@ -96,12 +91,7 @@
         "flower_duration_scale": 0.94,
         "dli_demand_scale": 0.95
       },
-      "bound_overrides": {
-        "flower_total_days": [
-          49.0,
-          70.0
-        ]
-      },
+      "bound_overrides": {},
       "evidence_source_ids": [
         "ahrens_2023_is_twelve_hours"
       ]

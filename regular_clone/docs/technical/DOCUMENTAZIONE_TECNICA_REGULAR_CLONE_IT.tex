@@ -75,8 +75,10 @@
 \begin{longtable}{@{}p{2.2cm}p{2.2cm}p{3.6cm}p{6.8cm}@{}}
 \toprule
 Versione & Data & Autore & Descrizione \\ \midrule
+1.6 & 2026-03-23 & Team progetto & Inserita sezione esplicita sui valori sperimentali assunti pre-calibrazione (fenologia, coefficenti genetici/famiglia, bounds calibrazione twin) e riorganizzazione path repository (\texttt{docs/*}, \texttt{economics/*}). \\
+1.5 & 2026-03-23 & Team progetto & Hardening pre-calibrazione: template dataset self-contained e family-coherent, rimozione variabili durata non piu ottimizzabili (\texttt{veg\_days}/\texttt{flower\_*\_days}), KPI economici estesi (ricavi, EBITDA, ROI, break-even) e script operativo \texttt{scripts/run\_economic\_analysis.py}. \\
 1.4 & 2026-03-22 & Team progetto & Enforcement hard del cap energia in realtime anche con \texttt{--profile-json} (\texttt{controller\_literature\_realtime.py} e \texttt{core/realtime\_io.py}); aggiornamento sezione test/coerenza. \\
-1.3 & 2026-03-22 & Team progetto & Introduzione vincolo hard \texttt{yield\_cap\_annual\_kg} in optimizer/realtime, planner default a 80 kg/anno, integrazione modulo economico locale \texttt{Analisi economica/cea\_economic\_analysis.py}. \\
+1.3 & 2026-03-22 & Team progetto & Introduzione vincolo hard \texttt{yield\_cap\_annual\_kg} in optimizer/realtime, planner default a 80 kg/anno, integrazione modulo economico locale \texttt{economics/cea\_economic\_analysis.py}. \\
 1.2 & 2026-03-22 & Team progetto & Supporto nativo realtime per \texttt{max\_yield\_energy}/\texttt{max\_quality\_energy} e sezione esplicativa ad alto livello per stakeholder non tecnici. \\
 1.1 & 2026-03-22 & Team progetto & Riorganizzazione capitolo fenologico: parametri \texttt{10--14 gg germinazione} e \texttt{27--35 gg seed->talea} dichiarati hard-coded con evidenza implementativa. \\
 1.0 & 2026-03-22 & Team progetto & Prima emissione tecnica dedicata al runtime \texttt{regular\_clone}, con policy codice dominante e mappa scostamenti dal business plan. \\
@@ -268,11 +270,58 @@ Parametro & Min & Max & Unita & Fonte primaria runtime \\ \midrule
 \texttt{blue\_flower\_frac} & 0.10 & 0.28 & frazione & \texttt{holweg\_2024\_red\_white\_spectra} \\
 \texttt{far\_red\_flower\_frac} & 0.02 & 0.14 & frazione & \texttt{holweg\_2024\_red\_white\_spectra} \\
 \texttt{uvb\_late\_frac} & 0.00 & 0.10 & frazione & \texttt{llewellyn\_2023\_uv\_minimal\_effect} \\
-\texttt{veg\_days} & 20 & 34 & giorni & mantenuto per retrocompatibilita BO \\
-\texttt{flower\_total\_days} & 58 & 78 & giorni & mantenuto per retrocompatibilita BO \\
-\texttt{flower\_early\_days} & 24 & 44 & giorni & mantenuto per retrocompatibilita BO \\
 \bottomrule
 \end{longtable}
+Nota: le durate fenologiche non sono piu variabili decisionali della BO; il runtime usa solo durate hard family-specific.
+
+\section{Valori sperimentali assunti (baseline pre-calibrazione)}
+Questa sezione esplicita i valori assunti dal sistema prima della calibrazione su dati reali.
+In questa fase tali valori sono \textbf{priors sperimentali} o vincoli hard runtime.
+
+\subsection*{A) Vincoli family-hard indica/sativa}
+\begin{longtable}{@{}p{4.2cm}p{2.1cm}p{2.1cm}p{4.5cm}@{}}
+\toprule
+Parametro & Indica & Sativa & Fonte / uso \\ \midrule
+\texttt{clone\_cycle\_days\_from\_cutting} & 105 & 120 & \texttt{core/model.py}, vincolo hard runtime. \\
+\texttt{stage\_days\_from\_cutting} & 12/24/7/32/30 & 12/27/7/37/37 & \texttt{core/model.py}, non ottimizzabile. \\
+\texttt{flower\_density\_pl\_m2} & 4.0 & 2.0 & \texttt{core/model.py}, \texttt{core/production\_planner.py}. \\
+\texttt{seed\_germination\_days} & 10--14 & 10--14 & \texttt{SEED\_GERMINATION\_DAYS\_RANGE}. \\
+\texttt{seed\_to\_cutting\_days} & 27--35 & 27--35 & metadata profilo, lead time pre-ciclo. \\
+\bottomrule
+\end{longtable}
+
+\subsection*{B) Coefficienti sperimentali di modello (profilo regular)}
+\begin{longtable}{@{}p{4.3cm}p{2.0cm}p{2.0cm}p{2.0cm}@{}}
+\toprule
+Coefficiente & Base & Fam. indica & Fam. sativa \\ \midrule
+\texttt{yield\_potential\_scale} & 1.05 & 0.99 & 1.02 \\
+\texttt{quality\_potential\_scale} & 1.03 & 0.98 & 1.03 \\
+\texttt{disease\_pressure\_scale} & 0.95 & 0.97 & 1.03 \\
+\texttt{hlvd\_pressure\_scale} & 0.95 & 1.00 & 1.01 \\
+\texttt{nutrient\_window\_scale} & 1.02 & 1.04 & 0.98 \\
+\texttt{flower\_duration\_scale} & n/a & 0.94 & 1.08 \\
+\texttt{dli\_demand\_scale} & n/a & 0.95 & 1.08 \\
+\bottomrule
+\end{longtable}
+Valori caricati da \texttt{configs/genetic\_profiles.json}; rappresentano priors sperimentali pre-calibrazione.
+
+\subsection*{C) Bounds parametri di calibrazione twin}
+\begin{longtable}{@{}p{4.4cm}p{2.0cm}p{2.0cm}p{4.4cm}@{}}
+\toprule
+Parametro \texttt{TwinCalibration} & Min & Max & Significato \\ \midrule
+\texttt{yield\_gain\_scale} & 0.60 & 1.60 & scala guadagno resa giornaliera \\
+\texttt{quality\_gain\_scale} & 0.60 & 1.60 & scala guadagno qualita giornaliera \\
+\texttt{transpiration\_scale} & 0.60 & 1.60 & scala traspirazione \\
+\texttt{disease\_inc\_scale} & 0.50 & 2.00 & incremento rischio patogeni \\
+\texttt{hlvd\_inc\_scale} & 0.50 & 2.00 & incremento pressione HLVD \\
+\texttt{penalty\_scale} & 0.50 & 2.50 & scala penalita processo \\
+\texttt{energy\_scale} & 0.60 & 1.80 & scala consumo energetico \\
+\texttt{yield\_post\_scale} & 0.70 & 1.30 & scala resa ciclo finale \\
+\texttt{quality\_post\_scale} & 0.70 & 1.30 & scala qualita ciclo finale \\
+\texttt{quality\_post\_offset} & -20.0 & 20.0 & offset qualita finale \\
+\bottomrule
+\end{longtable}
+Questi intervalli sono definiti in \texttt{calibrate\_twin.py} e costituiscono il dominio di fit nella fase di calibrazione.
 
 \section{Override genetici/famiglia/cultivar}
 Precedenza effettiva dei bounds:
@@ -586,6 +635,7 @@ python -m venv .venv
   --out-json .\runtime\profiles\twin_calibration.json ^
   --store-db .\runtime\db\cea_timeseries.db
 \end{lstlisting}
+Il template e self-contained (profili inline) e validato con controlli hard su coerenza famiglia/densita/sottosistema idroponico.
 
 \section{Ottimizzazione offline}
 \begin{lstlisting}
@@ -617,6 +667,17 @@ python -m venv .venv
   --source mock_stream --use-mpc-supervisor --mpc-horizon 6 --mpc-candidates 96
 \end{lstlisting}
 
+\section{Analisi economica pre-go-live}
+\begin{lstlisting}
+.\.venv\Scripts\python.exe .\scripts\run_economic_analysis.py ^
+  --target-annual-kg 80 --price-eur-g 4.0 ^
+  --mix-indica 0.5 --mix-sativa 0.5 ^
+  --target-yield-kg-m2-cycle 0.35 ^
+  --energy-cap-kwh-m2-cycle 700 ^
+  --out-json .\runtime\logs\economic_analysis_project.json
+\end{lstlisting}
+Output principale: KPI annui (ricavi, EBITDA, ROI, payback, break-even) e check di coerenza con planner.
+
 \section{Artefatti runtime}
 \begin{longtable}{@{}p{4.2cm}p{7.8cm}@{}}
 \toprule
@@ -625,6 +686,7 @@ DB SQLite & \texttt{runtime/db/cea\_timeseries.db} \\
 Output JSONL controllo & \texttt{runtime/jsonl/control\_output\_literature\_realtime.jsonl} \\
 Profili runtime & \texttt{runtime/profiles/} \\
 Dashboard HTML & \texttt{runtime/logs/dashboard\_timeseries.html} \\
+Analisi economica JSON & \texttt{runtime/logs/economic\_analysis\_project.json} \\
 \bottomrule
 \end{longtable}
 
@@ -661,7 +723,7 @@ File test & Copertura \\ \midrule
 \texttt{test\_realtime\_mode\_support.py} & Coerenza mapping modalita energy in realtime + validazione parsing cap energia e helper runtime. \\
 \texttt{test\_regular\_profile\_constraints.py} & Verifica durate/densita hard regular per famiglia e finestra hard \texttt{germinazione/seed->talea}. \\
 \texttt{test\_production\_planner.py} & Vincoli planner 80 kg/anno, check saturazione e rispetto cap annuo da schedule settimanale. \\
-\texttt{test\_economic\_hybrid\_model.py} & Verifica modulo economico locale \texttt{regular\_clone/Analisi economica/cea\_economic\_analysis.py}. \\
+\texttt{test\_economic\_hybrid\_model.py} & Verifica modulo economico locale \texttt{regular\_clone/economics/cea\_economic\_analysis.py}. \\
 \bottomrule
 \end{longtable}
 
@@ -727,7 +789,7 @@ Modalita realtime energy-constrained & \texttt{controller\_literature\_realtime.
 Calibrazione twin & \texttt{calibrate\_twin.py} & Cap. 7, 10 \\
 Storage e audit & \texttt{core/storage.py}, \texttt{core/governance.py} & Cap. 10, 13 \\
 Planner logistico & \texttt{core/production\_planner.py} & Cap. 10, 14 \\
-Blocco economico & \texttt{Analisi economica/cea\_economic\_analysis.py} & Cap. 2, 11, 15 \\
+Blocco economico & \texttt{economics/cea\_economic\_analysis.py} & Cap. 2, 11, 15 \\
 Validazione & \texttt{tests/test\_*.py}, \texttt{scripts/run\_tests.ps1} & Cap. 11 \\
 \bottomrule
 \end{longtable}

@@ -97,53 +97,17 @@
         "k_mg_l": [
           100.0,
           240.0
-        ],
-        "veg_days": [
-          20.0,
-          34.0
-        ],
-        "flower_total_days": [
-          58.0,
-          78.0
-        ],
-        "flower_early_days": [
-          24.0,
-          44.0
         ]
       },
       "family_bound_overrides": {
         "hybrid": {},
         "sativa_dominant": {
-          "veg_days": [
-            24.0,
-            36.0
-          ],
-          "flower_total_days": [
-            70.0,
-            84.0
-          ],
-          "flower_early_days": [
-            28.0,
-            50.0
-          ],
           "flower_ppfd": [
             900.0,
             1900.0
           ]
         },
         "indica_dominant": {
-          "veg_days": [
-            18.0,
-            30.0
-          ],
-          "flower_total_days": [
-            56.0,
-            72.0
-          ],
-          "flower_early_days": [
-            24.0,
-            42.0
-          ],
           "flower_ppfd": [
             780.0,
             1750.0

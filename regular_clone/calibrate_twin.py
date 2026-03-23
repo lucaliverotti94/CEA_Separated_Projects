@@ -18,6 +18,8 @@ from core.genetics import (
 from core.governance import dict_signature, file_signature, git_commit_short, new_run_id
 from core.model import (
     CEADigitalTwin,
+    FLOWER_DENSITY_BY_FAMILY,
+    HARD_STAGE_DAYS_BY_FAMILY,
     StrategyProfile,
     TwinCalibration,
     clamp_twin_calibration,
@@ -34,6 +36,13 @@ METRIC_WEIGHTS = {
     "disease_pressure": 1.3,
     "hlvd_pressure": 1.3,
     "energy_kwh_m2": 0.8,
+}
+
+MODE_BASE = {
+    "max_yield": "max_yield",
+    "max_quality": "max_quality",
+    "max_yield_energy": "max_yield",
+    "max_quality_energy": "max_quality",
 }
 
 
@@ -319,9 +328,13 @@ def _split_cases(cases: List[CycleCase], val_ratio: float, seed: int) -> Tuple[L
 
 
 def _load_case(item: Dict, i: int, dataset_dir: Path, default_seed: int) -> CycleCase:
-    mode = str(item.get("mode", "max_yield"))
-    if mode not in {"max_yield", "max_quality"}:
-        raise ValueError(f"Invalid mode for cycle #{i}: {mode}")
+    mode_raw = str(item.get("mode", "max_yield"))
+    if mode_raw not in MODE_BASE:
+        raise ValueError(
+            f"Invalid mode for cycle #{i}: {mode_raw}. "
+            "Supported: max_yield, max_quality, max_yield_energy, max_quality_energy."
+        )
+    mode = MODE_BASE[mode_raw]
 
     if "profile_json" in item:
         p = Path(item["profile_json"])
@@ -376,6 +389,32 @@ def _load_case(item: Dict, i: int, dataset_dir: Path, default_seed: int) -> Cycl
     profile.metadata["cultivar_family"] = norm_family
     if cultivar_name:
         profile.metadata["cultivar_name"] = cultivar_name
+
+    profile_cycle_days = int(sum(int(v) for v in profile.stage_days.values()))
+    expected_stage_days = HARD_STAGE_DAYS_BY_FAMILY.get(norm_family)
+    if expected_stage_days:
+        expected_cycle_days = int(sum(int(v) for v in expected_stage_days.values()))
+        if profile_cycle_days != expected_cycle_days:
+            raise ValueError(
+                f"Cycle #{i}: profile cycle days ({profile_cycle_days}) are not coherent with "
+                f"family '{norm_family}' hard cycle ({expected_cycle_days}). "
+                "Use a profile generated for the same cultivar_family."
+            )
+
+    expected_density = FLOWER_DENSITY_BY_FAMILY.get(norm_family)
+    if expected_density is not None and "plant_density_pl_m2" in context:
+        observed_density = float(context["plant_density_pl_m2"])
+        if abs(observed_density - float(expected_density)) > 1e-9:
+            raise ValueError(
+                f"Cycle #{i}: plant_density_pl_m2={observed_density:.3f} does not match "
+                f"{norm_family} hard density {float(expected_density):.3f} pl/m2."
+            )
+
+    hydro_subsystem = str(context.get("hydro_subsystem", "")).strip().upper()
+    if hydro_subsystem and ("DWC" not in hydro_subsystem and "NFT" not in hydro_subsystem):
+        raise ValueError(
+            f"Cycle #{i}: hydro_subsystem='{context.get('hydro_subsystem')}' is not coherent with DWC/NFT scope."
+        )
 
     return CycleCase(
         case_id=str(item.get("id", f"cycle_{i:03d}")),

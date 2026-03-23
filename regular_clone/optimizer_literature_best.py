@@ -113,9 +113,6 @@ class CannabisYieldLiteratureBuilder(StrategyBuilder):
             "blue_flower_frac": Bounds(0.10, 0.28),
             "far_red_flower_frac": Bounds(0.02, 0.14),
             "uvb_late_frac": Bounds(0.00, 0.10),
-            "veg_days": Bounds(20.0, 34.0),
-            "flower_total_days": Bounds(58.0, 78.0),
-            "flower_early_days": Bounds(24.0, 44.0),
         }
 
     def parameter_bounds(self) -> Dict[str, Bounds]:
